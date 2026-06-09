@@ -741,7 +741,11 @@ async function appendEvent(env: Env, sessionId: string, input: Omit<EventRecord,
 
 async function listEvents(env: Env, sessionId: string, after: string): Promise<EventRecord[]> {
   const eventIds = await getJson<string[]>(env, eventIndexKey(sessionId));
-  const events = eventIds ? await listEventsById(env, sessionId, eventIds) : await listJsonObjects<EventRecord>(env, `sessions/${sessionId}/events/`);
+  const ids = eventIds
+    ?.filter((eventId) => !after || eventId > after)
+    .sort((a, b) => a.localeCompare(b))
+    .slice(-100);
+  const events = ids ? await listEventsById(env, sessionId, ids) : await listJsonObjects<EventRecord>(env, `sessions/${sessionId}/events/`);
   return events
     .filter((event) => !after || event.id > after)
     .sort((a, b) => a.id.localeCompare(b.id))
@@ -749,12 +753,8 @@ async function listEvents(env: Env, sessionId: string, after: string): Promise<E
 }
 
 async function listEventsById(env: Env, sessionId: string, eventIds: string[]): Promise<EventRecord[]> {
-  const events: EventRecord[] = [];
-  for (const eventId of eventIds) {
-    const event = await getJson<EventRecord>(env, eventKey(sessionId, eventId));
-    if (event) events.push(event);
-  }
-  return events;
+  const events = await Promise.all(eventIds.map((eventId) => getJson<EventRecord>(env, eventKey(sessionId, eventId))));
+  return events.filter((event): event is EventRecord => Boolean(event));
 }
 
 async function cleanupExpiredSessions(env: Env): Promise<void> {
@@ -775,9 +775,8 @@ async function deletePrefix(env: Env, prefix: string): Promise<void> {
   let cursor: string | undefined;
   do {
     const listed = await env.SOE_MAILBOX.list({ prefix, cursor });
-    for (const object of listed.objects) {
-      await env.SOE_MAILBOX.delete(object.key);
-    }
+    const keys = listed.objects.map((object) => object.key);
+    if (keys.length > 0) await env.SOE_MAILBOX.delete(keys);
     cursor = listed.truncated ? listed.cursor : undefined;
   } while (cursor);
 }
