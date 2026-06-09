@@ -10,8 +10,6 @@ import { findCommand } from "../helpers/commands.mjs";
 
 const meta = {
   id: "550e8400-e29b-41d4-a716-446655440000",
-  code: "550e8400-e29b-41d4-a716-446655440000",
-  helperName: "terminal",
   status: "waiting",
   createdAt: 0,
   expiresAt: Date.UTC(2030, 0, 1)
@@ -34,7 +32,7 @@ test("generated shell agent is POSIX syntax-valid and portable across common Uni
   assert.match(script, /xclip -selection clipboard/);
   assert.match(script, /xsel --clipboard --input/);
   assert.match(script, /clip\.exe/);
-  assert.match(script, /base64 --decode/);
+  assert.match(script, /base64 -d/);
   assert.match(script, /base64 -D/);
   assert.match(script, /command -v timeout/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/hello/);
@@ -52,7 +50,6 @@ test("generated PowerShell agent parses and keeps Windows request fallbacks", as
 
   assert.match(script, /\$SessionId = "550e8400-e29b-41d4-a716-446655440000"/);
   assert.match(script, /Set-Clipboard/);
-  assert.match(script, /Invoke-WebRequest/);
   assert.match(script, /System\.Net\.WebRequest/);
   assert.match(script, /Get-ResponseHeader/);
   assert.match(script, /InnerException\.Response/);

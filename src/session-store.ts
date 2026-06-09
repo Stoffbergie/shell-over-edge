@@ -1,101 +1,11 @@
 import { cleanupRetentionMs } from "./config";
-import { base64Encode, randomId } from "./crypto";
-import type { CommandRecord, Env, EventRecord, SessionMeta } from "./types";
+import type { Env, SessionMeta } from "./types";
 
 export async function expireIfNeeded(env: Env, meta: SessionMeta): Promise<SessionMeta> {
   if (Date.now() < meta.expiresAt || meta.status === "ended" || meta.status === "expired") return meta;
-  const expired = { ...meta, status: "expired" as const, expiredEventWritten: true };
+  const expired = { ...meta, status: "expired" as const };
   await putJson(env, metaKey(expired.id), expired);
-  if (!meta.expiredEventWritten) {
-    await appendEvent(env, expired.id, {
-      type: "session_expired",
-      message: `Session ${expired.code} expired`,
-      status: expired.status
-    });
-  }
   return expired;
-}
-
-export async function enqueueCommand(env: Env, sessionId: string, input: Omit<CommandRecord, "id" | "status" | "createdAt">): Promise<CommandRecord> {
-  const command: CommandRecord = {
-    id: randomId(),
-    status: "queued",
-    createdAt: Date.now(),
-    ...input
-  };
-  await putJson(env, commandKey(sessionId, command.id), command);
-  const queue = (await getJson<string[]>(env, commandQueueKey(sessionId))) || [];
-  queue.push(command.id);
-  await putJson(env, commandQueueKey(sessionId), queue);
-  return command;
-}
-
-export async function nextQueuedCommand(env: Env, sessionId: string): Promise<CommandRecord | null> {
-  let queue = await getJson<string[]>(env, commandQueueKey(sessionId));
-  if (!queue) {
-    const commands = await listJsonObjects<CommandRecord>(env, `sessions/${sessionId}/commands/`);
-    queue = commands
-      .filter((command) => command.status === "queued")
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((command) => command.id);
-  }
-  while (queue.length > 0) {
-    const commandId = queue.shift();
-    if (!commandId) continue;
-    const command = await getJson<CommandRecord>(env, commandKey(sessionId, commandId));
-    if (command?.status === "queued") {
-      return command;
-    }
-  }
-  return null;
-}
-
-export async function commandResponse(command: CommandRecord): Promise<Response> {
-  const headers = commandHeaders(command);
-  return new Response(command.body || "", { status: 200, headers });
-}
-
-function commandHeaders(command: CommandRecord): Headers {
-  const headers = new Headers({
-    "Cache-Control": "no-store",
-    "Content-Type": "application/octet-stream",
-    "X-Command-Id": command.id,
-    "X-Command-Type": command.type,
-    "X-Command-Timeout": String(command.timeoutSeconds)
-  });
-  if (command.cwd) headers.set("X-Command-Cwd-Base64", base64Encode(command.cwd));
-  return headers;
-}
-
-export async function appendEvent(env: Env, sessionId: string, input: Omit<EventRecord, "id" | "ts">): Promise<EventRecord> {
-  const event: EventRecord = {
-    id: randomId(),
-    ts: Date.now(),
-    ...input
-  };
-  await putJson(env, eventKey(sessionId, event.id), event);
-  const eventIds = (await getJson<string[]>(env, eventIndexKey(sessionId))) || [];
-  eventIds.push(event.id);
-  await putJson(env, eventIndexKey(sessionId), eventIds.slice(-500));
-  return event;
-}
-
-export async function listEvents(env: Env, sessionId: string, after: string): Promise<EventRecord[]> {
-  const eventIds = await getJson<string[]>(env, eventIndexKey(sessionId));
-  const ids = eventIds
-    ?.filter((eventId) => !after || eventId > after)
-    .sort((a, b) => a.localeCompare(b))
-    .slice(-100);
-  const events = ids ? await listEventsById(env, sessionId, ids) : await listJsonObjects<EventRecord>(env, `sessions/${sessionId}/events/`);
-  return events
-    .filter((event) => !after || event.id > after)
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .slice(-100);
-}
-
-async function listEventsById(env: Env, sessionId: string, eventIds: string[]): Promise<EventRecord[]> {
-  const events = await Promise.all(eventIds.map((eventId) => getJson<EventRecord>(env, eventKey(sessionId, eventId))));
-  return events.filter((event): event is EventRecord => Boolean(event));
 }
 
 export async function cleanupExpiredSessions(env: Env): Promise<void> {
@@ -150,20 +60,4 @@ export async function getJson<T>(env: Env, key: string): Promise<T | null> {
 
 export function metaKey(id: string): string {
   return `sessions/${id}/meta.json`;
-}
-
-export function commandKey(sessionId: string, commandId: string): string {
-  return `sessions/${sessionId}/commands/${commandId}.json`;
-}
-
-function commandQueueKey(sessionId: string): string {
-  return `sessions/${sessionId}/command-queue.json`;
-}
-
-function eventKey(sessionId: string, eventId: string): string {
-  return `sessions/${sessionId}/events/${eventId}.json`;
-}
-
-function eventIndexKey(sessionId: string): string {
-  return `sessions/${sessionId}/event-index.json`;
 }

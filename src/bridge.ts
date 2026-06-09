@@ -1,14 +1,37 @@
 import { DurableObject } from "cloudflare:workers";
 import { maxCommandBytes, maxResultBytes } from "./config";
-import { base64Encode, randomId, textEncoder } from "./crypto";
-import { jsonResponse, normalizeTimeout, readLimitedText, textResponse } from "./http";
+import { base64Encode, randomId } from "./crypto";
+import { cleanString, normalizeTimeout, readLimitedText, textResponse } from "./http";
 import { logInfo } from "./log";
-import type { CommandWaiter, Env } from "./types";
+import type { Env } from "./types";
+
+type BridgeCommand = {
+  id: string;
+  type: "shell";
+  body: string;
+  cwd: string;
+  timeoutSeconds: number;
+};
+
+type CommandPayload = {
+  body?: unknown;
+  cwd?: unknown;
+  timeoutSeconds?: unknown;
+};
+
+type ResponseWaiter = {
+  commandId?: string;
+  resolve: (response: Response) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+const maxSendWaitMs = 55_000;
+const nextWaitMs = 25_000;
 
 export class CommandBridge extends DurableObject<Env> {
-  private agentWriter?: WritableStreamDefaultWriter<Uint8Array>;
-  private waiter?: CommandWaiter;
-  private keepAlive?: ReturnType<typeof setInterval>;
+  private queued: BridgeCommand[] = [];
+  private nextWaiters: ResponseWaiter[] = [];
+  private resultWaiters = new Map<string, ResponseWaiter>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -16,83 +39,71 @@ export class CommandBridge extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/events") return this.openEvents(request);
-    if (url.pathname === "/command") return this.runCommand(request);
-    if (url.pathname.startsWith("/result/")) return this.receiveResult(request, url.pathname.slice("/result/".length));
-    if (url.pathname === "/bye") return this.closeAgent();
+    if (url.pathname === "/send") return this.sendCommand(request);
+    if (url.pathname === "/next") return this.nextCommand(request);
+    if (url.pathname.startsWith("/result/")) return this.receiveResult(request, cleanString(url.pathname.slice("/result/".length), 200));
+    if (url.pathname === "/end") return this.endSession();
     return textResponse("Not found\n", 404);
   }
 
-  private openEvents(request: Request): Response {
-    this.closeWriter();
-    const stream = new TransformStream<Uint8Array, Uint8Array>();
-    this.agentWriter = stream.writable.getWriter();
-    this.writeSse("event: connected\ndata: ok\n\n");
-    this.keepAlive = setInterval(() => {
-      this.writeSse(": keepalive\n\n");
-    }, 15000);
-    request.signal.addEventListener("abort", () => {
-      this.closeWriter();
+  private async sendCommand(request: Request): Promise<Response> {
+    const payload = await request.json().catch(() => ({})) as CommandPayload;
+    const body = cleanString(payload.body, maxCommandBytes).trim();
+    if (!body) return textResponse("Command body is required\n", 400);
+
+    const command: BridgeCommand = {
+      id: randomId(),
+      type: "shell",
+      body,
+      cwd: cleanString(payload.cwd, 500),
+      timeoutSeconds: normalizeTimeout(payload.timeoutSeconds ?? 30)
+    };
+
+    const waitMs = Math.min(command.timeoutSeconds * 1000 + 1000, maxSendWaitMs);
+    const response = new Promise<Response>((resolve) => {
+      const timer = setTimeout(() => {
+        this.resultWaiters.delete(command.id);
+        this.removeQueued(command.id);
+        logInfo("command_timeout", { commandId: command.id, waitMs });
+        resolve(textResponse("Timed out waiting for command result\n", 504));
+      }, waitMs);
+      this.resultWaiters.set(command.id, { commandId: command.id, resolve, timer });
     });
-    logInfo("v1_agent_connected", { objectId: this.ctx.id.toString() });
-    return new Response(stream.readable, {
-      headers: {
-        "Cache-Control": "no-store",
-        "Connection": "keep-alive",
-        "Content-Type": "text/event-stream; charset=utf-8"
-      }
-    });
+
+    this.dispatch(command);
+    logInfo("command_sent", { commandId: command.id, bytes: command.body.length, timeoutSeconds: command.timeoutSeconds });
+    return response;
   }
 
-  private async runCommand(request: Request): Promise<Response> {
-    if (!this.agentWriter) {
-      logInfo("v1_command_no_agent", { objectId: this.ctx.id.toString() });
-      return textResponse("No agent connected for that key\n", 404);
-    }
-    if (this.waiter) {
-      logInfo("v1_command_conflict", { objectId: this.ctx.id.toString(), commandId: this.waiter.commandId });
-      return textResponse("Another command is already running for this agent\n", 409);
-    }
-    const body = (await readLimitedText(request, maxCommandBytes)).trim();
-    if (!body) return textResponse("Command body is required\n", 400);
-    const commandId = randomId();
-    const timeoutSeconds = normalizeTimeout(request.headers.get("x-timeout-seconds") || 30);
-    const waitMs = Math.min(timeoutSeconds * 1000 + 5000, 55000);
-    let resolveResult!: (response: Response) => void;
-    const result = new Promise<Response>((resolve) => {
-      resolveResult = resolve;
+  private nextCommand(request: Request): Response | Promise<Response> {
+    const command = this.queued.shift();
+    if (command) return commandResponse(command);
+
+    return new Promise<Response>((resolve) => {
+      let settled = false;
+      const finish = (response: Response) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.nextWaiters = this.nextWaiters.filter((waiter) => waiter.resolve !== finish);
+        resolve(response);
+      };
+      const timer = setTimeout(() => finish(new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } })), nextWaitMs);
+      this.nextWaiters.push({ resolve: finish, timer });
+      request.signal.addEventListener("abort", () => finish(new Response(null, { status: 499 })), { once: true });
     });
-    const timer = setTimeout(() => {
-      if (this.waiter?.commandId === commandId) this.waiter = undefined;
-      logInfo("v1_command_timeout", { objectId: this.ctx.id.toString(), commandId, waitMs });
-      resolveResult(textResponse(`Command ${commandId} timed out waiting for a result\n`, 504));
-    }, waitMs);
-    this.waiter = { commandId, resolve: resolveResult, timer };
-    try {
-      await this.writeSse(`event: command\nid: ${commandId}\ndata: ${timeoutSeconds}:${base64Encode(body)}\n\n`);
-    } catch {
-      clearTimeout(timer);
-      if (this.waiter?.commandId === commandId) this.waiter = undefined;
-      this.closeWriter();
-      logInfo("v1_command_send_failed", { objectId: this.ctx.id.toString(), commandId });
-      return textResponse("Agent disconnected\n", 404);
-    }
-    logInfo("v1_command_sent", { objectId: this.ctx.id.toString(), commandId, bytes: body.length, timeoutSeconds });
-    return result;
   }
 
   private async receiveResult(request: Request, commandId: string): Promise<Response> {
-    if (!this.waiter || this.waiter.commandId !== commandId) {
-      logInfo("v1_result_without_waiter", { objectId: this.ctx.id.toString(), commandId, waitingFor: this.waiter?.commandId || null });
-      return jsonResponse({ error: "Command not found" }, 404);
-    }
-    const exitCode = Number(new URL(request.url).searchParams.get("exit") || "0");
+    const waiter = this.resultWaiters.get(commandId);
+    if (!waiter) return textResponse("Command not found\n", 404);
+
+    const exitCode = parseExitCode(new URL(request.url).searchParams.get("exit"));
     const output = await readLimitedText(request, maxResultBytes);
-    const waiter = this.waiter;
     clearTimeout(waiter.timer);
-    this.waiter = undefined;
-    logInfo("v1_command_result", { objectId: this.ctx.id.toString(), commandId, exitCode, status: exitCode === 0 ? "completed" : "failed", bytes: output.length });
+    this.resultWaiters.delete(commandId);
     waiter.resolve(new Response(output, {
+      status: exitCode === 0 ? 200 : 500,
       headers: {
         "Cache-Control": "no-store",
         "Content-Type": "text/plain; charset=utf-8",
@@ -100,28 +111,53 @@ export class CommandBridge extends DurableObject<Env> {
         "X-Exit-Code": String(exitCode)
       }
     }));
-    return jsonResponse({ ok: true });
+    logInfo("command_result", { commandId, exitCode, status: exitCode === 0 ? "completed" : "failed", bytes: output.length });
+    return textResponse("ok\n");
   }
 
-  private closeAgent(): Response {
-    this.closeWriter();
-    if (this.waiter) {
-      clearTimeout(this.waiter.timer);
-      this.waiter.resolve(textResponse("Agent disconnected\n", 410));
-      this.waiter = undefined;
+  private endSession(): Response {
+    for (const waiter of this.nextWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(textResponse("Session ended\n", 410));
     }
-    logInfo("v1_agent_stopped", { objectId: this.ctx.id.toString() });
-    return jsonResponse({ ok: true });
+    for (const waiter of this.resultWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(textResponse("Session ended\n", 410));
+    }
+    this.nextWaiters = [];
+    this.resultWaiters.clear();
+    this.queued = [];
+    return textResponse("ended\n");
   }
 
-  private async writeSse(value: string): Promise<void> {
-    await this.agentWriter?.write(textEncoder.encode(value));
+  private dispatch(command: BridgeCommand): void {
+    const waiter = this.nextWaiters.shift();
+    if (!waiter) {
+      this.queued.push(command);
+      return;
+    }
+    clearTimeout(waiter.timer);
+    waiter.resolve(commandResponse(command));
   }
 
-  private closeWriter(): void {
-    if (this.keepAlive) clearInterval(this.keepAlive);
-    this.keepAlive = undefined;
-    this.agentWriter?.close().catch(() => undefined);
-    this.agentWriter = undefined;
+  private removeQueued(commandId: string): void {
+    this.queued = this.queued.filter((command) => command.id !== commandId);
   }
+}
+
+function commandResponse(command: BridgeCommand): Response {
+  const headers = new Headers({
+    "Cache-Control": "no-store",
+    "Content-Type": "application/octet-stream",
+    "X-Command-Id": command.id,
+    "X-Command-Type": command.type,
+    "X-Command-Timeout": String(command.timeoutSeconds)
+  });
+  if (command.cwd) headers.set("X-Command-Cwd-Base64", base64Encode(command.cwd));
+  return new Response(command.body, { headers });
+}
+
+function parseExitCode(value: string | null): number {
+  const parsed = Number(value || "0");
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : 1;
 }
