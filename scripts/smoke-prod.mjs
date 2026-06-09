@@ -1,12 +1,79 @@
+import { lookup, resolve4 } from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
+
 const baseUrl = (process.env.SOE_BASE_URL || process.argv.find((arg) => arg.startsWith("--base-url="))?.slice("--base-url=".length) || "https://soe.stoff.dev").replace(/\/$/, "");
+const retryableDnsCodes = new Set(["ENOTFOUND", "EAI_AGAIN"]);
 
 async function request(path, init = {}) {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    signal: AbortSignal.timeout(15000)
+  const url = new URL(path, `${baseUrl}/`);
+  const body = init.body == null ? undefined : Buffer.from(init.body);
+  return requestText(url, {
+    body,
+    headers: init.headers || {},
+    method: init.method || "GET"
   });
-  const text = await response.text();
-  return { response, text };
+}
+
+function requestText(url, init) {
+  const client = url.protocol === "http:" ? http : https;
+  const headers = { ...init.headers };
+  if (init.body && !hasHeader(headers, "content-length")) {
+    headers["Content-Length"] = String(init.body.byteLength);
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = client.request(url, {
+      headers,
+      lookup: resilientLookup,
+      method: init.method,
+      timeout: 15000
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const status = response.statusCode || 0;
+        resolve({
+          response: {
+            ok: status >= 200 && status < 300,
+            status
+          },
+          text: Buffer.concat(chunks).toString("utf8")
+        });
+      });
+    });
+
+    request.on("error", reject);
+    request.on("timeout", () => request.destroy(new Error(`Request timed out after 15000ms: ${url.href}`)));
+    if (init.body) request.write(init.body);
+    request.end();
+  });
+}
+
+function resilientLookup(hostname, options, callback) {
+  resolveHost(hostname, options).then((result) => {
+    if (Array.isArray(result)) {
+      callback(null, result);
+      return;
+    }
+    callback(null, result.address, result.family);
+  }, callback);
+}
+
+async function resolveHost(hostname, options) {
+  try {
+    return await lookup(hostname, options);
+  } catch (error) {
+    if (!retryableDnsCodes.has(error.code)) throw error;
+    const records = await resolve4(hostname);
+    if (records.length === 0) throw error;
+    const addresses = records.map((address) => ({ address, family: 4 }));
+    return options.all ? addresses : addresses[0];
+  }
+}
+
+function hasHeader(headers, name) {
+  return Object.keys(headers).some((header) => header.toLowerCase() === name);
 }
 
 function assert(condition, message) {
@@ -15,7 +82,7 @@ function assert(condition, message) {
 
 const root = await request("/");
 assert(root.response.ok, `GET / returned ${root.response.status}`);
-assert(root.text.includes("soe"), "GET / did not return soe usage");
+assert(root.text.includes("Shell Over Edge"), "GET / did not return Shell Over Edge usage");
 
 const legacy = await request("/connect.sh");
 assert(legacy.response.status === 404, `legacy connect.sh should be disabled, got ${legacy.response.status}`);

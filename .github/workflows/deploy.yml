@@ -50,6 +50,12 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Require Cloudflare secrets
+        if: ${{ inputs.smoke_only != true }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+
       - name: Check
         if: ${{ inputs.smoke_only != true }}
         run: pnpm run check
@@ -59,15 +65,11 @@ jobs:
         run: pnpm run dry-run
 
       - name: Deploy
-        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' && inputs.smoke_only != true }}
+        if: ${{ inputs.smoke_only != true }}
         run: pnpm wrangler deploy
 
-      - name: Skip deploy
-        if: ${{ env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == '' || inputs.smoke_only == true }}
-        run: echo "Cloudflare deploy skipped."
-
       - name: Production smoke checks
-        if: ${{ success() && (inputs.smoke_only == true || (env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '')) }}
+        if: ${{ success() }}
         run: pnpm run smoke:prod
 
       - name: Deployment summary
