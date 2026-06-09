@@ -60,11 +60,9 @@ export async function nextQueuedCommand(env: Env, sessionId: string): Promise<Co
     if (!commandId) continue;
     const command = await getJson<CommandRecord>(env, commandKey(sessionId, commandId));
     if (command?.status === "queued") {
-      await putJson(env, commandQueueKey(sessionId), queue);
       return command;
     }
   }
-  await putJson(env, commandQueueKey(sessionId), queue);
   return null;
 }
 

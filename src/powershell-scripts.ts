@@ -157,8 +157,71 @@ function Decode-Base64Text([string]$Value) {
   return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Value))
 }
 
+function Get-ResponseHeader([object]$Response, [string]$Name) {
+  if (!$Response -or !$Response.Headers) { return "" }
+  $Value = $Response.Headers[$Name]
+  if ($Value) { return [string]$Value }
+  if ($Response.Headers.AllKeys) {
+    foreach ($Key in $Response.Headers.AllKeys) {
+      if ($Key -ieq $Name) { return [string]$Response.Headers[$Key] }
+    }
+  }
+  if ($Response.Headers.Keys) {
+    foreach ($Key in $Response.Headers.Keys) {
+      if ($Key -ieq $Name) { return [string]$Response.Headers[$Key] }
+    }
+  }
+  return ""
+}
+
+function Get-ErrorResponse([object]$ErrorRecord) {
+  if ($ErrorRecord.Exception.Response) { return $ErrorRecord.Exception.Response }
+  if ($ErrorRecord.Exception.InnerException -and $ErrorRecord.Exception.InnerException.Response) {
+    return $ErrorRecord.Exception.InnerException.Response
+  }
+  return $null
+}
+
+function Invoke-AgentDownload {
+  param([string]$Method, [string]$Path, [string]$OutFile)
+  $Request = [System.Net.WebRequest]::Create("$BaseUrl$Path")
+  $Request.Method = $Method
+  foreach ($Key in $Headers.Keys) {
+    $Request.Headers.Add($Key, [string]$Headers[$Key])
+  }
+  try {
+    $Response = $Request.GetResponse()
+  } catch {
+    $ErrorResponse = Get-ErrorResponse $_
+    if ($ErrorResponse) {
+      $Response = $ErrorResponse
+    } else {
+      throw
+    }
+  }
+  try {
+    $StatusCode = [int]$Response.StatusCode
+    if ($StatusCode -eq 204) {
+      [IO.File]::WriteAllBytes($OutFile, [byte[]]@())
+      return [pscustomobject]@{ StatusCode = $StatusCode; Headers = $Response.Headers }
+    }
+    $Stream = $Response.GetResponseStream()
+    $File = [IO.File]::Open($OutFile, [IO.FileMode]::Create, [IO.FileAccess]::Write)
+    try {
+      if ($Stream) { $Stream.CopyTo($File) }
+    } finally {
+      $File.Close()
+      if ($Stream) { $Stream.Close() }
+    }
+    return [pscustomobject]@{ StatusCode = $StatusCode; Headers = $Response.Headers }
+  } finally {
+    $Response.Close()
+  }
+}
+
 function Invoke-AgentRequest {
   param([string]$Method, [string]$Path, [string]$OutFile, [object]$Body, [string]$ContentType)
+  if ($OutFile) { return Invoke-AgentDownload -Method $Method -Path $Path -OutFile $OutFile }
   $Parameters = @{
     Uri = "$BaseUrl$Path"
     Method = $Method
@@ -171,7 +234,8 @@ function Invoke-AgentRequest {
   try {
     return Invoke-WebRequest @Parameters
   } catch {
-    if ($_.Exception.Response) { return $_.Exception.Response }
+    $ErrorResponse = Get-ErrorResponse $_
+    if ($ErrorResponse) { return $ErrorResponse }
     throw
   }
 }
@@ -232,7 +296,7 @@ Write-Host ""
 Write-Host "Stop anytime: Ctrl+C"
 Write-Host ""
 
-[Console]::TreatControlCAsInput = $false
+try { [Console]::TreatControlCAsInput = $false } catch {}
 try {
   Invoke-AgentRequest -Method Post -Path "/api/agent/$Code/hello" -Body (@{ platform = $PSVersionTable.Platform; user = [Environment]::UserName; cwd = (Get-Location).Path } | ConvertTo-Json -Compress) -ContentType "application/json" | Out-Null
   while ($true) {
@@ -256,10 +320,10 @@ try {
       Start-Sleep -Seconds 2
       continue
     }
-    $CommandId = [string]$Response.Headers["X-Command-Id"]
-    $CommandType = [string]$Response.Headers["X-Command-Type"]
-    $Cwd = Decode-Base64Text ([string]$Response.Headers["X-Command-Cwd-Base64"])
-    $TargetPath = Decode-Base64Text ([string]$Response.Headers["X-Command-Path-Base64"])
+    $CommandId = Get-ResponseHeader $Response "X-Command-Id"
+    $CommandType = Get-ResponseHeader $Response "X-Command-Type"
+    $Cwd = Decode-Base64Text (Get-ResponseHeader $Response "X-Command-Cwd-Base64")
+    $TargetPath = Decode-Base64Text (Get-ResponseHeader $Response "X-Command-Path-Base64")
     if ($CommandType -eq "shell") {
       $ExitCode = Run-Command -CommandBody (Get-Content $BodyFile -Raw) -Cwd $Cwd -ResultFile $ResultFile
     } elseif ($CommandType -eq "write-file") {
@@ -270,7 +334,7 @@ try {
       [IO.File]::WriteAllText($ResultFile, "Unknown command type: $CommandType")
       $ExitCode = 1
     }
-    Invoke-AgentRequest -Method Post -Path "/api/agent/$Code/result/$CommandId?exit=$ExitCode" -Body ([IO.File]::ReadAllBytes($ResultFile)) -ContentType "application/octet-stream" | Out-Null
+    Invoke-AgentRequest -Method Post -Path "/api/agent/$Code/result/\${CommandId}?exit=$ExitCode" -Body ([IO.File]::ReadAllBytes($ResultFile)) -ContentType "application/octet-stream" | Out-Null
     Remove-Item $BodyFile, $ResultFile -Force
   }
 } finally {
