@@ -12,11 +12,17 @@ export type RequestLog = {
 
 export type TestServer = {
   baseUrl: string;
+  publicBaseUrl: string;
   requests: RequestLog[];
   close: () => Promise<void>;
 };
 
-export async function startAppServer(app: Hono<{ Bindings: Env }>, fixture: TestFixture): Promise<TestServer> {
+export type TestServerOptions = {
+  listenHost?: string;
+  publicHost?: string;
+};
+
+export async function startAppServer(app: Hono<{ Bindings: Env }>, fixture: TestFixture, options: TestServerOptions = {}): Promise<TestServer> {
   const requests: RequestLog[] = [];
   const server = createServer(async (incoming, outgoing) => {
     try {
@@ -41,13 +47,19 @@ export async function startAppServer(app: Hono<{ Bindings: Env }>, fixture: Test
     }
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const listenHost = options.listenHost || "127.0.0.1";
+  await new Promise<void>((resolve) => server.listen(0, listenHost, () => resolve()));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Could not start local test server");
-  fixture.env.BASE_URL = `http://127.0.0.1:${address.port}`;
+  const localHost = listenHost === "0.0.0.0" ? "127.0.0.1" : listenHost;
+  const publicHost = options.publicHost || localHost;
+  const baseUrl = `http://${localHost}:${address.port}`;
+  const publicBaseUrl = `http://${publicHost}:${address.port}`;
+  fixture.env.BASE_URL = publicBaseUrl;
 
   return {
-    baseUrl: fixture.env.BASE_URL,
+    baseUrl,
+    publicBaseUrl,
     requests,
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };

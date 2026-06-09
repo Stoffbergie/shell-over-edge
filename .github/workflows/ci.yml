@@ -57,8 +57,10 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
+          - ubuntu-22.04
           - macos-latest
           - windows-latest
+          - windows-2022
     steps:
       - uses: actions/checkout@v6
         with:
@@ -76,6 +78,31 @@ jobs:
 
       - name: Test
         run: pnpm run test
+
+      - name: Ensure tests did not modify files
+        run: git diff --exit-code
+
+  linux-containers:
+    name: Linux Container Agents
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Test generated agents in Linux containers
+        run: SOE_DOCKER_E2E=1 pnpm exec vitest run tests/e2e/linux-container-agent.test.ts
 
       - name: Ensure tests did not modify files
         run: git diff --exit-code

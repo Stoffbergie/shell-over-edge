@@ -143,6 +143,47 @@ test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell a
   }
 });
 
+test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell agent enforces command timeout", async () => {
+  const fixture = createTestEnv();
+  const server = await startAppServer(app, fixture);
+  const dir = await mkdtemp(join(tmpdir(), "soe-powershell-timeout-e2e-"));
+  let agent: ReturnType<typeof spawn> | undefined;
+  let output = () => "";
+  try {
+    const session = await createSession(server.baseUrl, "/api/sessions.ps1");
+    const scriptPath = join(dir, "agent.ps1");
+    await writeFile(scriptPath, session.script);
+    await mkdir(join(dir, "work"));
+    agent = spawn(powerShell, powerShellArgs(powerShell, scriptPath), {
+      cwd: join(dir, "work"),
+      env: {
+        ...process.env,
+        NO_PROXY: "127.0.0.1,localhost",
+        no_proxy: "127.0.0.1,localhost"
+      }
+    });
+    output = captureOutput(agent);
+
+    const startedAt = performance.now();
+    const timedOut = await sendCommand(server.baseUrl, session.id, "Start-Sleep -Seconds 10; Write-Output too-late", diagnostics(output, server), 3);
+    const elapsedMs = performance.now() - startedAt;
+    assert.equal(timedOut.status, 500);
+    assert.match(timedOut.text, /timed out/i);
+    assert.ok(elapsedMs < 8000, `PowerShell timeout took ${elapsedMs}ms\n${diagnostics(output, server)()}`);
+
+    const recovered = await sendCommand(server.baseUrl, session.id, "Write-Output recovered", diagnostics(output, server));
+    assert.equal(recovered.status, 200);
+    assert.match(recovered.text, /recovered/);
+
+    await endSession(server.baseUrl, session.id);
+    await waitForExit(agent, 10_000, output);
+  } finally {
+    if (agent && agent.exitCode === null) agent.kill();
+    await rm(dir, { force: true, recursive: true });
+    await server.close();
+  }
+});
+
 async function createSession(baseUrl: string, path = "/api/sessions"): Promise<{ id: string; script: string }> {
   const response = await fetch(`${baseUrl}${path}`, { method: "POST" });
   assert.equal(response.status, 200);
