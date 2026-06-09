@@ -6,6 +6,8 @@ import { powerShellAgentScript } from "./powershell-scripts";
 import { sessionBridge } from "./session-bridge";
 import { shellAgentScript } from "./shell-scripts";
 import {
+  expireIfNeeded,
+  getJson,
   metaKey,
   putJson
 } from "./session-store";
@@ -13,6 +15,7 @@ import type { Env, SessionMeta } from "./types";
 
 type SessionApp = Hono<{ Bindings: Env }>;
 type SessionContext = Context<{ Bindings: Env }>;
+type SessionGuard = { meta: SessionMeta } | { response: Response };
 type ScriptKind = "shell" | "powershell";
 
 const sessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -37,10 +40,6 @@ async function createSession(c: SessionContext, kind: ScriptKind): Promise<Respo
     expiresAt: now + sessionTtlMs
   };
   await putJson(c.env, metaKey(id), meta);
-  await sessionBridge(c.env, id).fetch("https://session/open", {
-    method: "POST",
-    body: JSON.stringify({ expiresAt: meta.expiresAt })
-  });
   logInfo("session_created", { sessionId: id, expiresAt: meta.expiresAt });
 
   const baseUrl = publicBaseUrl(c.req.raw, c.env);
@@ -55,62 +54,71 @@ async function createSession(c: SessionContext, kind: ScriptKind): Promise<Respo
 }
 
 async function sendCommand(c: SessionContext): Promise<Response> {
-  const sessionId = safeSessionId(c.req.param("id"));
-  if (!sessionId) return textResponse("Session not found\n", 404);
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
 
   const input = await readCommandInput(c.req.raw);
   if (!input.body) return textResponse("Command body is required\n", 400);
 
-  return sessionBridge(c.env, sessionId).fetch("https://session/send", {
+  return sessionBridge(c.env, guard.meta.id).fetch("https://session/send", {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
 async function agentHello(c: SessionContext): Promise<Response> {
-  const sessionId = safeSessionId(c.req.param("id"));
-  if (!sessionId) return textResponse("Session not found\n", 404);
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
 
   await readLimitedText(c.req.raw, 2000);
-  logInfo("agent_connected", { sessionId, platform: cleanString(c.req.header("x-agent-platform"), 120) });
-  return sessionBridge(c.env, sessionId).fetch("https://session/hello", { method: "POST" });
+  logInfo("agent_connected", { sessionId: guard.meta.id, platform: cleanString(c.req.header("x-agent-platform"), 120) });
+  return textResponse("connected\n");
 }
 
 async function agentNext(c: SessionContext): Promise<Response> {
-  const sessionId = safeSessionId(c.req.param("id"));
-  if (!sessionId) return textResponse("Session not found\n", 404);
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
 
-  return sessionBridge(c.env, sessionId).fetch("https://session/next");
+  return sessionBridge(c.env, guard.meta.id).fetch("https://session/next");
 }
 
 async function agentResult(c: SessionContext): Promise<Response> {
-  const sessionId = safeSessionId(c.req.param("id"));
-  if (!sessionId) return textResponse("Session not found\n", 404);
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
 
   const commandId = cleanString(c.req.param("commandId"), 200);
   if (!commandId) return textResponse("Command not found\n", 404);
-  return sessionBridge(c.env, sessionId).fetch(`https://session/result/${commandId}${new URL(c.req.url).search}`, {
+  return sessionBridge(c.env, guard.meta.id).fetch(`https://session/result/${commandId}${new URL(c.req.url).search}`, {
     method: "POST",
     body: c.req.raw.body
   });
 }
 
 async function endSession(c: SessionContext): Promise<Response> {
-  const sessionId = safeSessionId(c.req.param("id"));
-  if (!sessionId) return textResponse("Session not found\n", 404);
+  const guard = await requireSession(c.env, c.req.param("id"), { allowInactive: true });
+  if ("response" in guard) return guard.response;
 
-  const closed = await sessionBridge(c.env, sessionId).fetch("https://session/end", { method: "POST" });
-  if (!closed.ok && closed.status !== 410) return closed;
-  const now = Date.now();
-  await putJson(c.env, metaKey(sessionId), {
-    id: sessionId,
-    status: "ended",
-    createdAt: now,
-    expiresAt: now,
-    endedAt: now
-  } satisfies SessionMeta);
-  logInfo("session_ended", { sessionId });
+  if (guard.meta.status !== "ended") {
+    const now = Date.now();
+    const meta = { ...guard.meta, status: "ended" as const, endedAt: now };
+    await putJson(c.env, metaKey(meta.id), meta);
+    logInfo("session_ended", { sessionId: meta.id });
+  }
+  await sessionBridge(c.env, guard.meta.id).fetch("https://session/end", { method: "POST" });
   return textResponse("ended\n");
+}
+
+async function requireSession(env: Env, id: string | undefined, options: { allowInactive?: boolean } = {}): Promise<SessionGuard> {
+  const sessionId = safeSessionId(id);
+  if (!sessionId) return { response: textResponse("Session not found\n", 404) };
+
+  const meta = await getJson<SessionMeta>(env, metaKey(sessionId));
+  if (!meta) return { response: textResponse("Session not found\n", 404) };
+
+  const fresh = await expireIfNeeded(env, meta);
+  if (!options.allowInactive && fresh.status === "ended") return { response: textResponse("Session ended\n", 410) };
+  if (!options.allowInactive && fresh.status === "expired") return { response: textResponse("Session expired\n", 410) };
+  return { meta: fresh };
 }
 
 async function readCommandInput(request: Request): Promise<{ body: string; cwd: string; timeoutSeconds: number }> {
