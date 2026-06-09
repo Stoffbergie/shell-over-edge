@@ -28,14 +28,14 @@ export async function text(response) {
   return response.text();
 }
 
-export async function createSession(app, fixture, helperName = "Ada") {
-  const response = await app.request("/api/sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ helperName })
+export async function createSession(app, fixture, path = "/api/sessions") {
+  const response = await app.request(path, {
+    method: "POST"
   }, fixture.env, fixture.ctx);
   assert.equal(response.status, 200);
-  return json(response);
+  const id = response.headers.get("X-Session-Id");
+  assert.match(id || "", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  return { id, code: id, script: await response.text(), contentType: response.headers.get("Content-Type") || "" };
 }
 
 export class TestExecutionContext {

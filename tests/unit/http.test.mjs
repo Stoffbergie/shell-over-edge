@@ -1,17 +1,7 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { apiKey, bearerToken, cleanString, jsonResponse, normalizeTimeout, readJson, readLimitedText, textResponse } from "../../.tmp/test-build/src/http.js";
-import { PayloadTooLargeError, BadRequestError } from "../../.tmp/test-build/src/http.js";
-
-const validUuid = ["550e8400", "e29b", "41d4", "a716", "446655440000"].join("-");
-
-test("parses bearer tokens and UUID api keys strictly", () => {
-  const sampleToken = ["sample", "value"].join("-");
-  assert.equal(bearerToken(new Request("https://soe.test", { headers: { Authorization: `Bearer ${sampleToken}` } })), sampleToken);
-  assert.equal(bearerToken(new Request("https://soe.test", { headers: { Authorization: `Basic ${sampleToken}` } })), "");
-  assert.equal(apiKey(new Request("https://soe.test", { headers: { "x-api-key": validUuid } })), validUuid);
-  assert.equal(apiKey(new Request("https://soe.test", { headers: { "x-api-key": "not-a-uuid" } })), "");
-});
+import { cleanString, jsonResponse, normalizeTimeout, readLimitedText, textResponse } from "../../.tmp/test-build/src/http.js";
+import { PayloadTooLargeError } from "../../.tmp/test-build/src/http.js";
 
 test("normalizes and bounds command timeouts", () => {
   assert.equal(normalizeTimeout("0"), 1);
@@ -30,19 +20,6 @@ test("reads limited text and rejects oversized bodies", async () => {
   await assert.rejects(
     readLimitedText(new Request("https://soe.test", { method: "POST", body: "hello!" }), 5),
     PayloadTooLargeError
-  );
-});
-
-test("reads JSON only for JSON content and reports invalid JSON", async () => {
-  assert.deepEqual(await readJson(new Request("https://soe.test", { method: "POST", body: "ignored" })), {});
-  assert.deepEqual(await readJson(new Request("https://soe.test", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ok: true })
-  })), { ok: true });
-  await assert.rejects(
-    readJson(new Request("https://soe.test", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{" })),
-    BadRequestError
   );
 });
 

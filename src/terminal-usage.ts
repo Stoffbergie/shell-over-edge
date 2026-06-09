@@ -1,17 +1,17 @@
 export function terminalUsage(baseUrl: string): string {
   return `Shell Over Edge
 
-Create a session:
-curl -sS -X POST ${baseUrl}/api/sessions \\
-  -H "Content-Type: application/json" \\
-  --data '{"helperName":"Dirk"}'
+Open a macOS/Linux session:
+curl -sS -X POST ${baseUrl}/api/sessions | sh
 
-Run shellCommand or windowsCommand from the response on the remote machine.
+Open a Windows session:
+irm -Method Post ${baseUrl}/api/sessions.ps1 | iex
 
-Queue a command:
-curl -sS -X POST ${baseUrl}/api/sessions/<session-id>/commands \\
-  -H "Authorization: Bearer <helper-token>" \\
-  -H "Content-Type: application/json" \\
+Send a command:
+curl -sS -X POST ${baseUrl}/api/sessions/<uuid>/send --data 'pwd'
+
+Send a command with options:
+curl -sS -X POST ${baseUrl}/api/sessions/<uuid>/send \\
   --data '{"body":"pwd"}'
 `;
 }
