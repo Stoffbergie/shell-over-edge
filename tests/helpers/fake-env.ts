@@ -1,5 +1,7 @@
 import { strict as assert } from "node:assert";
 import type { Hono } from "hono";
+import type { DirectAttempt, DirectCandidate } from "../../src/domain/direct";
+import { normalizeDirectRole, normalizeDirectTransport, normalizeDirectUrl, normalizePriority, sortDirectCandidates } from "../../src/domain/direct";
 import type { SessionMeta } from "../../src/domain/session";
 import type { Env } from "../../src/worker/env";
 
@@ -169,6 +171,8 @@ class FakeSessionBridge {
   private queued: BridgeCommand[] = [];
   private nextWaiters: BridgeWaiter[] = [];
   private resultWaiters = new Map<string, BridgeWaiter>();
+  private candidates: DirectCandidate[] = [];
+  private attempts: DirectAttempt[] = [];
 
   async fetch(request: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
     const url = new URL(String(request));
@@ -177,6 +181,9 @@ class FakeSessionBridge {
     if (url.pathname === "/send") return this.send(body);
     if (url.pathname === "/next") return this.next();
     if (url.pathname.startsWith("/result/")) return this.result(url.pathname.slice("/result/".length), url.searchParams.get("exit"), body);
+    if (url.pathname === "/candidates" && method === "POST") return this.publishCandidate(body);
+    if (url.pathname === "/candidates" && method === "GET") return this.listCandidates(url.searchParams.get("role"));
+    if (url.pathname === "/direct-attempts" && method === "POST") return this.recordDirectAttempt(body);
     if (url.pathname === "/end" && method === "POST") return this.end();
     return new Response("Not found\n", { status: 404 });
   }
@@ -232,6 +239,68 @@ class FakeSessionBridge {
     return new Response("ok\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
   }
 
+  private publishCandidate(body: string): Response {
+    const payload = JSON.parse(body || "{}") as { role?: unknown; transport?: unknown; url?: unknown; priority?: unknown; ttlSeconds?: unknown };
+    const role = normalizeDirectRole(payload.role);
+    const transport = normalizeDirectTransport(payload.transport);
+    const url = normalizeDirectUrl(payload.url);
+    if (!role || !transport || !url) return new Response("Invalid direct candidate\n", { status: 400 });
+
+    const now = Date.now();
+    const ttlSeconds = Number(payload.ttlSeconds);
+    const ttlMs = Number.isFinite(ttlSeconds) ? Math.min(Math.max(Math.trunc(ttlSeconds), 1), 120) * 1000 : 60_000;
+    const candidate: DirectCandidate = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      role,
+      transport,
+      url,
+      priority: normalizePriority(payload.priority),
+      createdAt: now,
+      expiresAt: now + ttlMs
+    };
+    this.pruneCandidates(now);
+    this.candidates = [
+      candidate,
+      ...this.candidates.filter((item) => !(item.role === candidate.role && item.url === candidate.url))
+    ];
+    this.trimCandidates(role);
+    return new Response(JSON.stringify(candidate), {
+      status: 201,
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/json; charset=utf-8"
+      }
+    });
+  }
+
+  private listCandidates(roleValue: string | null): Response {
+    this.pruneCandidates(Date.now());
+    const role = roleValue ? normalizeDirectRole(roleValue) : undefined;
+    if (roleValue && !role) return new Response("Invalid direct candidate role\n", { status: 400 });
+    const candidates = sortDirectCandidates(role ? this.candidates.filter((candidate) => candidate.role === role) : this.candidates);
+    return new Response(JSON.stringify({ candidates }), {
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/json; charset=utf-8"
+      }
+    });
+  }
+
+  private recordDirectAttempt(body: string): Response {
+    const payload = JSON.parse(body || "{}") as { candidateId?: unknown; ok?: unknown; latencyMs?: unknown; reason?: unknown };
+    const candidateId = typeof payload.candidateId === "string" ? payload.candidateId.slice(0, 200) : "";
+    if (!candidateId) return new Response("Invalid direct attempt\n", { status: 400 });
+    const latencyMs = Number(payload.latencyMs);
+    this.attempts = [{
+      candidateId,
+      ok: payload.ok === true,
+      latencyMs: Number.isFinite(latencyMs) ? Math.min(Math.max(Math.trunc(latencyMs), 0), 60_000) : 0,
+      reason: typeof payload.reason === "string" ? payload.reason.slice(0, 120) : "",
+      createdAt: Date.now()
+    }, ...this.attempts].slice(0, 40);
+    return new Response("ok\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
+  }
+
   private end(): Response {
     for (const waiter of this.nextWaiters) {
       clearTimeout(waiter.timer);
@@ -244,6 +313,8 @@ class FakeSessionBridge {
     this.queued = [];
     this.nextWaiters = [];
     this.resultWaiters.clear();
+    this.candidates = [];
+    this.attempts = [];
     return new Response("ended\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
   }
 
@@ -255,6 +326,16 @@ class FakeSessionBridge {
     }
     clearTimeout(waiter.timer);
     waiter.resolve(commandResponse(command));
+  }
+
+  private pruneCandidates(now: number): void {
+    this.candidates = this.candidates.filter((candidate) => candidate.expiresAt > now);
+  }
+
+  private trimCandidates(role: "agent" | "client"): void {
+    const keep = sortDirectCandidates(this.candidates.filter((candidate) => candidate.role === role)).slice(0, 8);
+    const keepIds = new Set(keep.map((candidate) => candidate.id));
+    this.candidates = this.candidates.filter((candidate) => candidate.role !== role || keepIds.has(candidate.id));
   }
 }
 

@@ -126,6 +126,31 @@ const hello = await request(`/api/sessions/${id}/hello`, {
 });
 assert(hello.response.ok, `agent hello returned ${hello.response.status}: ${hello.text}`);
 
+const candidate = await request(`/api/sessions/${id}/candidates`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: '{"role":"agent","transport":"http","url":"http://127.0.0.1:9/direct","priority":1,"ttlSeconds":60}'
+});
+assert(candidate.response.status === 201, `direct candidate returned ${candidate.response.status}: ${candidate.text}`);
+const candidatePayload = JSON.parse(candidate.text);
+assert(candidatePayload.id, "direct candidate id missing");
+assert(candidatePayload.role === "agent", "direct candidate role is wrong");
+
+const candidates = await request(`/api/sessions/${id}/candidates?role=agent`);
+assert(candidates.response.ok, `direct candidate list returned ${candidates.response.status}: ${candidates.text}`);
+assert(candidates.text.includes(candidatePayload.id), "direct candidate list did not include published candidate");
+
+const directAttempt = await request(`/api/sessions/${id}/direct-attempts`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({ candidateId: candidatePayload.id, ok: false, latencyMs: 1, reason: "smoke" })
+});
+assert(directAttempt.response.ok, `direct attempt returned ${directAttempt.response.status}: ${directAttempt.text}`);
+
 const send = request(`/api/sessions/${id}/send`, {
   method: "POST",
   body: '{"body":"printf smoke-prod","timeoutSeconds":10}'

@@ -84,6 +84,54 @@ test("send waits for the agent result and returns plain command output", async (
   assert.equal(await text(sentRaw), "nope\n");
 });
 
+test("sessions exchange short-lived direct transport candidates", async () => {
+  const fixture = createTestEnv();
+  const session = await createSession(app, fixture);
+
+  const invalid = await app.request(`/api/sessions/${session.id}/candidates`, {
+    method: "POST",
+    body: '{"role":"agent","url":"ftp://127.0.0.1/direct"}'
+  }, fixture.env, fixture.ctx);
+  assert.equal(invalid.status, 400);
+  assert.equal(await text(invalid), "Invalid direct candidate\n");
+
+  const published = await app.request(`/api/sessions/${session.id}/candidates`, {
+    method: "POST",
+    body: '{"role":"agent","transport":"http","url":"http://127.0.0.1:9999/direct","priority":5,"ttlSeconds":30}'
+  }, fixture.env, fixture.ctx);
+  assert.equal(published.status, 201);
+  const candidate = await published.json() as { id: string; role: string; transport: string; url: string; priority: number };
+  assert.ok(candidate.id);
+  assert.equal(candidate.role, "agent");
+  assert.equal(candidate.transport, "http");
+  assert.equal(candidate.url, "http://127.0.0.1:9999/direct");
+  assert.equal(candidate.priority, 5);
+
+  const client = await app.request(`/api/sessions/${session.id}/candidates`, {
+    method: "POST",
+    body: '{"role":"client","transport":"http","url":"http://127.0.0.1:8888/direct","priority":50}'
+  }, fixture.env, fixture.ctx);
+  assert.equal(client.status, 201);
+
+  const agents = await app.request(`/api/sessions/${session.id}/candidates?role=agent`, {}, fixture.env, fixture.ctx);
+  assert.equal(agents.status, 200);
+  const listed = await agents.json() as { candidates: Array<{ id: string; role: string; priority: number }> };
+  assert.equal(listed.candidates.length, 1);
+  assert.equal(listed.candidates[0]?.id, candidate.id);
+  assert.equal(listed.candidates[0]?.role, "agent");
+
+  const badRole = await app.request(`/api/sessions/${session.id}/candidates?role=helper`, {}, fixture.env, fixture.ctx);
+  assert.equal(badRole.status, 400);
+  assert.equal(await text(badRole), "Invalid direct candidate role\n");
+
+  const attempt = await app.request(`/api/sessions/${session.id}/direct-attempts`, {
+    method: "POST",
+    body: JSON.stringify({ candidateId: candidate.id, ok: false, latencyMs: 32, reason: "http-404" })
+  }, fixture.env, fixture.ctx);
+  assert.equal(attempt.status, 200);
+  assert.equal(await text(attempt), "ok\n");
+});
+
 test("invalid sessions, bad send payloads, and retired routes return text errors", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);
