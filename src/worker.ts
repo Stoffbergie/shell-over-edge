@@ -143,8 +143,14 @@ export class CommandBridge extends DurableObject<Env> {
   }
 
   private async runCommand(request: Request): Promise<Response> {
-    if (!this.agentWriter) return textResponse("No agent connected for that key\n", 404);
-    if (this.waiter) return textResponse("Another command is already running for this agent\n", 409);
+    if (!this.agentWriter) {
+      logInfo("v1_command_no_agent", { objectId: this.ctx.id.toString() });
+      return textResponse("No agent connected for that key\n", 404);
+    }
+    if (this.waiter) {
+      logInfo("v1_command_conflict", { objectId: this.ctx.id.toString(), commandId: this.waiter.commandId });
+      return textResponse("Another command is already running for this agent\n", 409);
+    }
     const body = (await readLimitedText(request, maxCommandBytes)).trim();
     if (!body) return textResponse("Command body is required\n", 400);
     const commandId = randomId();
@@ -156,6 +162,7 @@ export class CommandBridge extends DurableObject<Env> {
     });
     const timer = setTimeout(() => {
       if (this.waiter?.commandId === commandId) this.waiter = undefined;
+      logInfo("v1_command_timeout", { objectId: this.ctx.id.toString(), commandId, waitMs });
       resolveResult(textResponse(`Command ${commandId} timed out waiting for a result\n`, 504));
     }, waitMs);
     this.waiter = { commandId, resolve: resolveResult, timer };
@@ -165,20 +172,24 @@ export class CommandBridge extends DurableObject<Env> {
       clearTimeout(timer);
       if (this.waiter?.commandId === commandId) this.waiter = undefined;
       this.closeWriter();
+      logInfo("v1_command_send_failed", { objectId: this.ctx.id.toString(), commandId });
       return textResponse("Agent disconnected\n", 404);
     }
-    logInfo("v1_command_sent", { commandId });
+    logInfo("v1_command_sent", { objectId: this.ctx.id.toString(), commandId, bytes: body.length, timeoutSeconds });
     return result;
   }
 
   private async receiveResult(request: Request, commandId: string): Promise<Response> {
-    if (!this.waiter || this.waiter.commandId !== commandId) return jsonResponse({ error: "Command not found" }, 404);
+    if (!this.waiter || this.waiter.commandId !== commandId) {
+      logInfo("v1_result_without_waiter", { objectId: this.ctx.id.toString(), commandId, waitingFor: this.waiter?.commandId || null });
+      return jsonResponse({ error: "Command not found" }, 404);
+    }
     const exitCode = Number(new URL(request.url).searchParams.get("exit") || "0");
     const output = await readLimitedText(request, maxResultBytes);
     const waiter = this.waiter;
     clearTimeout(waiter.timer);
     this.waiter = undefined;
-    logInfo("v1_command_result", { commandId, exitCode, status: exitCode === 0 ? "completed" : "failed" });
+    logInfo("v1_command_result", { objectId: this.ctx.id.toString(), commandId, exitCode, status: exitCode === 0 ? "completed" : "failed", bytes: output.length });
     waiter.resolve(new Response(output, {
       headers: {
         "Cache-Control": "no-store",
@@ -1061,8 +1072,14 @@ run_command() {
   fi
   exit_code=$?
   cat "$result_file"
-  printf '\\n[exit %s]\\n' "$exit_code"
-  curl -fsS -X POST -H "x-api-key: $CODE" --data-binary "@$result_file" "$BASE_URL/api/v1/$CODE/result/$command_id?exit=$exit_code" >/dev/null || true
+  if [ "$exit_code" -ne 0 ]; then
+    printf '\\n[exit %s]\\n' "$exit_code"
+  fi
+  if curl -fsS -X POST -H "x-api-key: $CODE" --data-binary "@$result_file" "$BASE_URL/api/v1/$CODE/result/$command_id?exit=$exit_code" >/dev/null; then
+    printf '[remote] result posted: %s\\n' "$command_id"
+  else
+    printf '[remote] result upload failed: %s\\n' "$command_id"
+  fi
   rm -f "$result_file"
 }
 
@@ -1122,12 +1139,16 @@ try {
 
 function Send-Bye {
   try {
-    $Request = [System.Net.WebRequest]::Create("$BaseUrl/api/v1/$Code/bye")
-    $Request.Method = "POST"
-    $Request.Headers.Add("x-api-key", $Code)
-    $Request.ContentLength = 0
-    $Response = $Request.GetResponse()
-    $Response.Close()
+    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+      curl.exe -fsS -X POST -H "x-api-key: $Code" "$BaseUrl/api/v1/$Code/bye" | Out-Null
+    } else {
+      $Request = [System.Net.WebRequest]::Create("$BaseUrl/api/v1/$Code/bye")
+      $Request.Method = "POST"
+      $Request.Headers.Add("x-api-key", $Code)
+      $Request.ContentLength = 0
+      $Response = $Request.GetResponse()
+      $Response.Close()
+    }
   } catch {}
 }
 
@@ -1152,14 +1173,29 @@ function Run-Command([string]$CommandId, [string]$Payload) {
     $ExitCode = 1
   }
   if (Test-Path $ResultFile) { Get-Content $ResultFile -Raw | Write-Host }
-  Write-Host "[exit $ExitCode]"
-  Send-Result -CommandId $CommandId -ExitCode $ExitCode -ResultFile $ResultFile
+  if ($ExitCode -ne 0) { Write-Host "[exit $ExitCode]" }
+  try {
+    Send-Result -CommandId $CommandId -ExitCode $ExitCode -ResultFile $ResultFile
+  } catch {
+    Write-Host ("[remote] result upload failed " + $CommandId + ": " + $_.Exception.Message)
+    throw
+  }
   Remove-Item $ResultFile -Force
 }
 
 function Send-Result([string]$CommandId, [int]$ExitCode, [string]$ResultFile) {
+  $ResultSize = (Get-Item -LiteralPath $ResultFile).Length
+  $ResultUrl = $BaseUrl + "/api/v1/" + $Code + "/result/" + $CommandId + "?exit=" + $ExitCode
+  if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+    Write-Host ("[remote] posting result with curl.exe: " + $CommandId + " (" + $ResultSize + " bytes)")
+    curl.exe -fsS -X POST -H "x-api-key: $Code" --data-binary "@$ResultFile" "$ResultUrl" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "curl.exe exited $LASTEXITCODE" }
+    Write-Host ("[remote] result posted: " + $CommandId)
+    return
+  }
+  Write-Host ("[remote] posting result with WebRequest: " + $CommandId + " (" + $ResultSize + " bytes)")
   $Bytes = [IO.File]::ReadAllBytes($ResultFile)
-  $Request = [System.Net.WebRequest]::Create("$BaseUrl/api/v1/$Code/result/$CommandId?exit=$ExitCode")
+  $Request = [System.Net.WebRequest]::Create($ResultUrl)
   $Request.Method = "POST"
   $Request.Headers.Add("x-api-key", $Code)
   $Request.ContentType = "application/octet-stream"
@@ -1169,11 +1205,14 @@ function Send-Result([string]$CommandId, [int]$ExitCode, [string]$ResultFile) {
   $Stream.Close()
   $Response = $Request.GetResponse()
   $Response.Close()
+  Write-Host ("[remote] result posted: " + $CommandId)
 }
 
 function Open-EventStream {
+  Write-Host "[remote] connecting event stream"
   $Response = $Client.GetAsync("$BaseUrl/api/v1/$Code/events", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
   $Response.EnsureSuccessStatusCode() | Out-Null
+  Write-Host "[remote] event stream connected"
   $Stream = $Response.Content.ReadAsStreamAsync().Result
   return New-Object System.IO.StreamReader -ArgumentList $Stream
 }
@@ -1205,6 +1244,7 @@ try {
           $EventData = $Line.Substring(6)
         } elseif ($Line -eq "") {
           if ($EventType -eq "command" -and $EventId -and $EventData) {
+            Write-Host ("[remote] command received: " + $EventId)
             Run-Command -CommandId $EventId -Payload $EventData
           }
           $EventType = ""
@@ -1213,6 +1253,7 @@ try {
         }
       }
     } catch {
+      Write-Host ("[remote] stream error: " + $_.Exception.Message)
       Start-Sleep -Seconds 1
     }
   }
