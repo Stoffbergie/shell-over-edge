@@ -20,6 +20,7 @@ const requiredFiles = [
   ".github/workflows/dependency-review.yml",
   ".github/workflows/labeler.yml",
   ".github/workflows/release.yml",
+  "docs/assets/shell-over-edge-demo.gif",
   "LICENSE",
   "llms.txt",
   "pnpm-workspace.yaml",
@@ -86,6 +87,7 @@ async function main() {
   const readme = await readText(join(root, "README.md"));
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
   if (!readme.includes("Temporary shell access through Cloudflare Workers.")) failures.push("README one-liner is wrong");
+  if (!readme.includes("docs/assets/shell-over-edge-demo.gif")) failures.push("README must link the split-screen demo");
   if (!readme.includes("llms.txt")) failures.push("README must link llms.txt");
   if (!readme.includes("skills/shell-over-edge/SKILL.md")) failures.push("README must link the Shell Over Edge skill");
   if (readme.includes("Authorization: Bearer")) failures.push("README must not document retired bearer-token API");
