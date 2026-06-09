@@ -1,16 +1,18 @@
-# soe
+# Shell Over Edge
 
-[![CI](https://github.com/Stoffberg/soe/actions/workflows/ci.yml/badge.svg)](https://github.com/Stoffberg/soe/actions/workflows/ci.yml)
-[![Deploy](https://github.com/Stoffberg/soe/actions/workflows/deploy.yml/badge.svg)](https://github.com/Stoffberg/soe/actions/workflows/deploy.yml)
+[![CI](https://github.com/Stoffberg/shell-over-edge/actions/workflows/ci.yml/badge.svg)](https://github.com/Stoffberg/shell-over-edge/actions/workflows/ci.yml)
+[![Deploy](https://github.com/Stoffberg/shell-over-edge/actions/workflows/deploy.yml/badge.svg)](https://github.com/Stoffberg/shell-over-edge/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Temporary remote support over a Cloudflare Worker.
+Temporary shell and file access through Cloudflare Workers.
 
 Production: [https://soe.stoff.dev](https://soe.stoff.dev)
 
+Short name: `soe`.
+
 ## How It Works
 
-Create a session, send the generated command to the remote machine, then queue shell commands or file transfers through the session API. Sessions expire after two hours.
+Create a session, send the generated command to the remote machine, then queue shell commands or small file transfers through the session API. Sessions expire after two hours.
 
 ## Start A Session
 
@@ -109,6 +111,7 @@ Required bindings:
 - R2 bucket: `SOE_MAILBOX`
 - Durable Object namespace: `COMMAND_BRIDGES`
 - Custom domain: `soe.stoff.dev`
+- Worker name: `soe`
 - Optional legacy flag: `ENABLE_LEGACY_BRIDGE=true`
 
 GitHub deploys need these repository secrets:

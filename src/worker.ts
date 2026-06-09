@@ -958,7 +958,7 @@ function logInfo(event: string, fields: Record<string, unknown>): void {
 }
 
 function terminalUsage(baseUrl: string): string {
-  return `soe
+  return `Shell Over Edge
 
 Create a session:
 curl -sS -X POST ${baseUrl}/api/sessions \\
@@ -1088,7 +1088,7 @@ else
   CLIPBOARD='clipboard copy unavailable'
 fi
 
-printf '\\nsoe\\n\\nCode: %s (%s)\\n\\nHelper command:\\ncurl -sS %s -H "x-api-key: %s" --data-binary "pwd"\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$CLIPBOARD" "$BASE_URL" "$CODE"
+printf '\\nShell Over Edge\\n\\nCode: %s (%s)\\n\\nHelper command:\\ncurl -sS %s -H "x-api-key: %s" --data-binary "pwd"\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$CLIPBOARD" "$BASE_URL" "$CODE"
 trap 'post_bye; exit 0' INT TERM EXIT
 
 while true; do
@@ -1211,7 +1211,7 @@ function Open-EventStream {
 }
 
 Write-Host ""
-Write-Host "soe"
+Write-Host "Shell Over Edge"
 Write-Host ""
 Write-Host "Code: $Code ($Clipboard)"
 Write-Host ""
@@ -1333,7 +1333,7 @@ read_file() {
   cp "$target_path" "$output_file"
 }
 
-printf '\\nsoe\\n\\nSession: %s\\nHelper: %s\\nAccess: command runner + file transfer\\nExpires: %s\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$HELPER" "$EXPIRES"
+printf '\\nShell Over Edge\\n\\nSession: %s\\nHelper: %s\\nAccess: command runner + file transfer\\nExpires: %s\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$HELPER" "$EXPIRES"
 trap 'post_bye; exit 0' INT TERM EXIT
 curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data "{\"platform\":\"$(uname -s)\",\"user\":\"$(whoami)\",\"cwd\":\"$(pwd | sed 's/"/\\\\"/g')\"}" "$BASE_URL/api/agent/$CODE/hello" >/dev/null
 
@@ -1465,7 +1465,7 @@ function Read-RemoteFile([string]$TargetPath, [string]$ResultFile) {
 }
 
 Write-Host ""
-Write-Host "soe"
+Write-Host "Shell Over Edge"
 Write-Host ""
 Write-Host "Session: $Code"
 Write-Host "Helper: $Helper"

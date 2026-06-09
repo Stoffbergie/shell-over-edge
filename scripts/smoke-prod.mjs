@@ -15,7 +15,7 @@ function assert(condition, message) {
 
 const root = await request("/");
 assert(root.response.ok, `GET / returned ${root.response.status}`);
-assert(root.text.includes("soe"), "GET / did not return soe usage");
+assert(root.text.includes("Shell Over Edge"), "GET / did not return Shell Over Edge usage");
 
 const legacy = await request("/connect.sh");
 assert(legacy.response.status === 404, `legacy connect.sh should be disabled, got ${legacy.response.status}`);

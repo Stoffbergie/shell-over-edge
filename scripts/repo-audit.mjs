@@ -65,12 +65,18 @@ async function main() {
   const pkg = JSON.parse(await readText(join(root, "package.json")));
   if (pkg.name !== "soe") failures.push("package.json name must be soe");
   if (pkg.private !== false) failures.push("package.json private must be false");
+  if (pkg.description !== "Temporary shell and file access through Cloudflare Workers.") failures.push("package.json description is wrong");
   if (pkg.homepage !== "https://soe.stoff.dev") failures.push("package.json homepage must be https://soe.stoff.dev");
+  if (pkg.repository?.url !== "https://github.com/Stoffberg/shell-over-edge.git") failures.push("package.json repository URL is wrong");
 
   const wrangler = await readText(join(root, "wrangler.toml"));
   for (const value of ['name = "soe"', 'BASE_URL = "https://soe.stoff.dev"', 'pattern = "soe.stoff.dev"', 'bucket_name = "soe-mailbox"']) {
     if (!wrangler.includes(value)) failures.push(`wrangler.toml missing ${value}`);
   }
+
+  const readme = await readText(join(root, "README.md"));
+  if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
+  if (!readme.includes("Temporary shell and file access through Cloudflare Workers.")) failures.push("README one-liner is wrong");
 
   if (failures.length > 0) {
     console.error(failures.join("\n"));
