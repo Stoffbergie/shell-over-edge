@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 const root = process.cwd();
-const ignoredDirs = new Set([".git", ".wrangler", "node_modules"]);
+const ignoredDirs = new Set([".git", ".tmp", ".wrangler", "node_modules"]);
 const banned = [
   "remote" + ".stoff.dev",
   "remote" + "-stoff-dev",

@@ -15,11 +15,12 @@
     "build": "pnpm run typecheck",
     "typecheck": "tsc --noEmit",
     "deploy": "pnpm run check && wrangler deploy",
-    "check": "pnpm run typecheck && pnpm run repo:audit",
+    "check": "pnpm run typecheck && pnpm run test && pnpm run repo:audit",
     "validate": "pnpm run check && pnpm run dry-run",
     "dry-run": "wrangler deploy --dry-run",
     "repo:audit": "node scripts/repo-audit.mjs",
-    "smoke:prod": "node scripts/smoke-prod.mjs"
+    "smoke:prod": "node scripts/smoke-prod.mjs",
+    "test": "node scripts/run-tests.mjs"
   },
   "packageManager": "pnpm@11.5.2",
   "dependencies": {
