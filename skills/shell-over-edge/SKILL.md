@@ -36,6 +36,8 @@ Direct-helper internals:
 
 Use the relay `/send` path by default. Only use direct signals when a helper has an actual reachable direct transport and can fall back quickly.
 
+Native binary download is opt-in: set `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, or `SOE_NATIVE_URL` before running the bootstrap.
+
 ## Commands
 
 Create a POSIX session:

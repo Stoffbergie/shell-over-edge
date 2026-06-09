@@ -27,6 +27,7 @@ const requiredFiles = [
   "native/agent/main.zig",
   "pnpm-workspace.yaml",
   "scripts/build-native-linux.mjs",
+  "scripts/benchmark.mjs",
   "scripts/repo-audit.mjs",
   "scripts/smoke-prod.mjs",
   "skills/shell-over-edge/SKILL.md",
@@ -79,6 +80,7 @@ async function main() {
   if (pkg.homepage !== "https://soe.stoff.dev") failures.push("package.json homepage must be https://soe.stoff.dev");
   if (pkg.repository?.url !== "https://github.com/Stoffberg/shell-over-edge.git") failures.push("package.json repository URL is wrong");
   if (pkg.scripts?.test !== "vitest run") failures.push("package.json test script must use Vitest");
+  if (!pkg.scripts?.benchmark) failures.push("package.json missing benchmark");
   if (!pkg.scripts?.["test:load"]) failures.push("package.json missing test:load");
   if (!pkg.scripts?.["test:native"]) failures.push("package.json missing test:native");
   if (!pkg.scripts?.["test:containers"]) failures.push("package.json missing test:containers");
@@ -104,6 +106,8 @@ async function main() {
   if (!readme.includes("Reach any shell from anywhere.")) failures.push("README one-liner is wrong");
   if (!readme.includes("```mermaid")) failures.push("README must include a Mermaid flow diagram");
   if (!readme.includes("curl -sS https://soe.stoff.dev/a | sh")) failures.push("README must document POSIX bootstrap");
+  if (!readme.includes("pnpm run benchmark")) failures.push("README must document performance benchmark");
+  if (!readme.includes("SOE_WARM_NATIVE=1")) failures.push("README must document native download opt-in");
   if (!readme.includes("/api/sessions/<code>/signals")) failures.push("README must document direct signals");
   if (!readme.includes("/api/sessions/<code>/ice")) failures.push("README must document ICE config");
   if (!readme.includes("agent/main.zig")) failures.push("README must document native agent layout");
@@ -116,6 +120,7 @@ async function main() {
 
   const llms = await readText(join(root, "llms.txt"));
   if (!llms.includes("GET /a")) failures.push("llms.txt must document POSIX bootstrap");
+  if (!llms.includes("SOE_WARM_NATIVE=1")) failures.push("llms.txt must document native download opt-in");
   if (!llms.includes("POST /api/sessions")) failures.push("llms.txt must document session creation");
   if (!llms.includes("POST /api/sessions/<code>/send")) failures.push("llms.txt must document command send");
   if (!llms.includes("POST /api/sessions/<code>/signals")) failures.push("llms.txt must document direct signals");
@@ -126,6 +131,7 @@ async function main() {
   const skill = await readText(join(root, "skills/shell-over-edge/SKILL.md"));
   if (!skill.includes("name: shell-over-edge")) failures.push("Shell Over Edge skill missing name metadata");
   if (!skill.includes("GET https://soe.stoff.dev/a")) failures.push("Shell Over Edge skill must document POSIX bootstrap");
+  if (!skill.includes("SOE_WARM_NATIVE=1")) failures.push("Shell Over Edge skill must document native download opt-in");
   if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/send")) failures.push("Shell Over Edge skill must document command send");
   if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/signals")) failures.push("Shell Over Edge skill must document direct signals");
   if (!skill.includes("GET https://soe.stoff.dev/api/sessions/<code>/ice")) failures.push("Shell Over Edge skill must document ICE config");

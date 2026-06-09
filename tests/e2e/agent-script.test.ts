@@ -2,6 +2,8 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { test } from "vitest";
 import { strict as assert } from "node:assert";
@@ -67,6 +69,81 @@ test.skipIf(!sh || !curl)("POSIX bootstrap starts relay immediately when native 
     const result = await sendCommand(server.baseUrl, id, "printf soe-bootstrap-e2e", diagnostics(output, server));
     assert.equal(result.status, 200);
     assert.equal(result.text, "soe-bootstrap-e2e");
+
+    await endSession(server.baseUrl, id);
+    await waitForExit(agent, 10_000, output);
+  } finally {
+    if (agent && agent.exitCode === null) agent.kill();
+    await removeDir(dir);
+    await server.close();
+  }
+});
+
+test.skipIf(!sh || !curl)("POSIX bootstrap serves relay while native download is still running", async () => {
+  const fixture = createTestEnv();
+  const server = await startAppServer(app, fixture);
+  const native = await startHangingServer();
+  const dir = await mkdtemp(join(tmpdir(), "soe-posix-bootstrap-slow-native-"));
+  let agent: ReturnType<typeof spawn> | undefined;
+  let output = () => "";
+  try {
+    const script = await fetchText(`${server.baseUrl}/a`);
+    const scriptPath = join(dir, "bootstrap.sh");
+    await writeFile(scriptPath, script, { mode: 0o700 });
+    agent = spawn(sh, [scriptPath], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        SOE_WARM_NATIVE: "1",
+        SOE_NATIVE_URL: native.url,
+        NO_PROXY: "127.0.0.1,localhost",
+        no_proxy: "127.0.0.1,localhost"
+      }
+    });
+    output = captureOutput(agent);
+
+    const id = await waitForSessionId(output, 10_000);
+    await waitForNativeRequest(native, 10_000);
+    const result = await sendCommand(server.baseUrl, id, "printf soe-bootstrap-warm", diagnostics(output, server));
+    assert.equal(result.status, 200);
+    assert.equal(result.text, "soe-bootstrap-warm");
+
+    await endSession(server.baseUrl, id);
+    await waitForExit(agent, 10_000, output);
+  } finally {
+    if (agent && agent.exitCode === null) agent.kill();
+    await native.close();
+    await removeDir(dir);
+    await server.close();
+  }
+});
+
+test.skipIf(!sh || !curl)("POSIX bootstrap does not download native assets by default", async () => {
+  const fixture = createTestEnv();
+  const server = await startAppServer(app, fixture);
+  const dir = await mkdtemp(join(tmpdir(), "soe-posix-bootstrap-default-"));
+  let agent: ReturnType<typeof spawn> | undefined;
+  let output = () => "";
+  try {
+    const script = await fetchText(`${server.baseUrl}/a`);
+    const scriptPath = join(dir, "bootstrap.sh");
+    await writeFile(scriptPath, script, { mode: 0o700 });
+    agent = spawn(sh, [scriptPath], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        SOE_NATIVE_BASE_URL: `${server.baseUrl}/native-assets`,
+        NO_PROXY: "127.0.0.1,localhost",
+        no_proxy: "127.0.0.1,localhost"
+      }
+    });
+    output = captureOutput(agent);
+
+    const id = await waitForSessionId(output, 10_000);
+    const result = await sendCommand(server.baseUrl, id, "printf soe-bootstrap-default", diagnostics(output, server));
+    assert.equal(result.status, 200);
+    assert.equal(result.text, "soe-bootstrap-default");
+    assert.equal(server.requests.some((request) => request.path.includes("/native-assets/")), false);
 
     await endSession(server.baseUrl, id);
     await waitForExit(agent, 10_000, output);
@@ -273,6 +350,45 @@ async function waitForSessionId(output: () => string, timeoutMs: number): Promis
     await sleep(50);
   }
   throw new Error(`Bootstrap did not print a session id\n${output()}`);
+}
+
+type HangingServer = {
+  close: () => Promise<void>;
+  requests: string[];
+  url: string;
+};
+
+async function startHangingServer(): Promise<HangingServer> {
+  const requests: string[] = [];
+  const sockets = new Set<Socket>();
+  const server = createServer((request) => {
+    requests.push(request.url || "/");
+    request.resume();
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Could not start hanging server");
+  return {
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    },
+    requests,
+    url: `http://127.0.0.1:${address.port}/soe-agent`
+  };
+}
+
+async function waitForNativeRequest(server: HangingServer, timeoutMs: number): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (server.requests.length > 0) return;
+    await sleep(25);
+  }
+  throw new Error("Native download did not start");
 }
 
 async function removeDir(dir: string): Promise<void> {
