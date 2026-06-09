@@ -22,6 +22,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
       - name: Version
         id: version
         run: |
@@ -31,6 +35,23 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Build native agents
+        run: |
+          set -euo pipefail
+          mkdir -p dist/native
+          for item in \
+            "x86_64-linux-musl:soe-agent-x86_64-linux-musl:" \
+            "aarch64-linux-musl:soe-agent-aarch64-linux-musl:" \
+            "x86_64-windows:soe-agent-x86_64-windows.exe:.exe" \
+            "aarch64-windows:soe-agent-aarch64-windows.exe:.exe" \
+            "x86_64-macos:soe-agent-x86_64-macos:" \
+            "aarch64-macos:soe-agent-aarch64-macos:"; do
+            IFS=":" read -r target asset suffix <<< "$item"
+            zig build --release=small -Dtarget="$target"
+            cp "zig-out/bin/soe-agent$suffix" "dist/native/$asset"
+            rm -rf zig-out
+          done
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
@@ -39,3 +60,4 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+          files: dist/native/*
