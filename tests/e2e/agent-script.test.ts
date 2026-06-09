@@ -37,7 +37,7 @@ test.skipIf(!sh || !curl)("generated POSIX agent script connects, runs a command
     await waitForExit(agent, 10_000, output);
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
-    await rm(dir, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
+    await removeDir(dir);
     await server.close();
   }
 });
@@ -72,7 +72,7 @@ test.skipIf(!sh || !curl)("POSIX bootstrap starts relay immediately when native 
     await waitForExit(agent, 10_000, output);
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
-    await rm(dir, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
+    await removeDir(dir);
     await server.close();
   }
 });
@@ -106,7 +106,7 @@ test.skipIf(!sh || !curl)("generated POSIX agent script drains parallel relay se
     await waitForExit(agent, 10_000, output);
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
-    await rm(dir, { force: true, recursive: true });
+    await removeDir(dir);
     await server.close();
   }
 });
@@ -139,7 +139,7 @@ test.skipIf(process.platform === "win32" || !sh || !curl)("generated POSIX agent
     await waitForExit(agent, 10_000, output);
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
-    await rm(dir, { force: true, recursive: true });
+    await removeDir(dir);
     await server.close();
   }
 });
@@ -173,7 +173,7 @@ test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell a
     await waitForExit(agent, 10_000, output);
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
-    await rm(dir, { force: true, recursive: true });
+    await removeDir(dir);
     await server.close();
   }
 });
@@ -214,7 +214,7 @@ test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell a
     await waitForExit(agent, 10_000, output);
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
-    await rm(dir, { force: true, recursive: true });
+    await removeDir(dir);
     await server.close();
   }
 });
@@ -273,6 +273,10 @@ async function waitForSessionId(output: () => string, timeoutMs: number): Promis
     await sleep(50);
   }
   throw new Error(`Bootstrap did not print a session id\n${output()}`);
+}
+
+async function removeDir(dir: string): Promise<void> {
+  await rm(dir, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
 }
 
 function captureOutput(child: ReturnType<typeof spawn>): () => string {
