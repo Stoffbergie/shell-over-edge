@@ -10,6 +10,8 @@ Production: [https://soe.stoff.dev](https://soe.stoff.dev)
 
 Short name: `soe`.
 
+![Split-screen demo showing a Shell Over Edge session start and remote command send](docs/assets/shell-over-edge-demo.gif)
+
 ## Agent Resources
 
 - Compact agent reference: [`llms.txt`](llms.txt)
