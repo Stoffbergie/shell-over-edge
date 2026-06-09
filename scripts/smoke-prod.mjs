@@ -15,6 +15,16 @@ async function request(path, init = {}) {
   });
 }
 
+async function requestUntil(path, init, ready) {
+  let result;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    result = await request(path, init);
+    if (ready(result)) return result;
+    await sleep(1000);
+  }
+  return result;
+}
+
 function requestText(url, init) {
   const client = url.protocol === "http:" ? http : https;
   const headers = { ...init.headers };
@@ -81,6 +91,10 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const root = await request("/");
 assert(root.response.ok, `GET / returned ${root.response.status}`);
 assert(root.text.includes("Shell Over Edge"), "GET / did not return Shell Over Edge usage");
@@ -126,25 +140,25 @@ const hello = await request(`/api/sessions/${id}/hello`, {
 });
 assert(hello.response.ok, `agent hello returned ${hello.response.status}: ${hello.text}`);
 
-const ice = await request(`/api/sessions/${id}/ice`);
+const ice = await requestUntil(`/api/sessions/${id}/ice`, {}, (result) => result.response.status !== 404);
 assert(ice.response.ok, `ICE config returned ${ice.response.status}: ${ice.text}`);
 const icePayload = JSON.parse(ice.text);
 assert(Array.isArray(icePayload.iceServers), "ICE config did not return iceServers");
 assert(ice.text.includes("stun:stun.cloudflare.com:3478"), "ICE config did not include Cloudflare STUN fallback");
 
-const signal = await request(`/api/sessions/${id}/signals`, {
+const signal = await requestUntil(`/api/sessions/${id}/signals`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json"
   },
   body: '{"role":"agent","transport":"http","url":"http://127.0.0.1:9/direct","priority":1,"ttlSeconds":60}'
-});
+}, (result) => result.response.status !== 404);
 assert(signal.response.status === 201, `direct signal returned ${signal.response.status}: ${signal.text}`);
 const signalPayload = JSON.parse(signal.text);
 assert(signalPayload.id, "direct signal id missing");
 assert(signalPayload.role === "agent", "direct signal role is wrong");
 
-const signals = await request(`/api/sessions/${id}/signals?role=agent`);
+const signals = await requestUntil(`/api/sessions/${id}/signals?role=agent`, {}, (result) => result.response.status !== 404);
 assert(signals.response.ok, `direct signal list returned ${signals.response.status}: ${signals.text}`);
 assert(signals.text.includes(signalPayload.id), "direct signal list did not include published signal");
 
