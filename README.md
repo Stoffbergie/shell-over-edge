@@ -35,16 +35,16 @@ sequenceDiagram
     Worker->>Bridge: resolve waiter
     Bridge-->>Helper: plain command output
 
-    Agent->>Worker: POST /api/sessions/:id/candidates
-    Helper->>Worker: GET /api/sessions/:id/candidates?role=agent
+    Helper->>Worker: GET /api/sessions/:id/ice
+    Agent->>Worker: POST /api/sessions/:id/signals
+    Helper->>Worker: GET /api/sessions/:id/signals?role=agent
     Helper->>Agent: optional direct command POST
-    Helper->>Worker: POST /api/sessions/:id/direct-attempts
 
     Helper->>Worker: POST /api/sessions/:id/end
     Worker->>Bridge: close waiters
 ```
 
-R2 stores session metadata. The Durable Object coordinates the live command handoff and direct rendezvous state.
+R2 stores session metadata. The Durable Object coordinates the live command handoff and direct signaling state.
 
 ## Quick Start
 
@@ -74,16 +74,13 @@ End the session:
 curl -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/end
 ```
 
-## API
+## Core API
 
 | Endpoint | Body | Response |
 | --- | --- | --- |
 | `POST /api/sessions` | empty | POSIX shell agent script |
 | `POST /api/sessions.ps1` | empty | PowerShell agent script |
 | `POST /api/sessions/<uuid>/send` | raw text or JSON | plain command output |
-| `POST /api/sessions/<uuid>/candidates` | candidate JSON | candidate JSON |
-| `GET /api/sessions/<uuid>/candidates?role=agent` | empty | candidate list JSON |
-| `POST /api/sessions/<uuid>/direct-attempts` | attempt JSON | `ok` |
 | `POST /api/sessions/<uuid>/end` | empty | `ended` |
 
 For simple commands, send raw text:
@@ -110,13 +107,22 @@ The relay path is the default because it works anywhere outbound HTTPS works.
 
 Clients that can run a richer helper may use the Worker as a rendezvous plane:
 
-1. the agent publishes short-lived direct candidates
-2. the helper fetches agent candidates
-3. the helper tries a direct command POST with a small timeout budget
-4. the helper reports the attempt result
-5. if direct fails, the helper falls back to `/send`
+| Endpoint | Body | Response |
+| --- | --- | --- |
+| `GET /api/sessions/<uuid>/ice` | empty | ICE server JSON |
+| `POST /api/sessions/<uuid>/signals` | signal JSON | signal JSON |
+| `GET /api/sessions/<uuid>/signals?role=agent` | empty | signal list JSON |
 
-The generated curl-first agents do not open inbound listeners by default. Real internet NAT traversal needs a client transport that can do candidate discovery and hole punching; this API keeps that path separate from the reliable relay fallback.
+The direct upgrade is deliberately small:
+
+1. fetch ICE config when using WebRTC
+2. exchange short-lived direct signals
+3. try the direct stream with a small timeout budget
+4. if direct fails, fall back to `/send`
+
+The generated curl-first agents do not open inbound listeners by default. Real internet NAT traversal needs a client transport that can discover paths and hole punch; this API keeps that path separate from the reliable relay fallback.
+
+Without TURN secrets, `/ice` returns Cloudflare STUN only. With Cloudflare TURN configured, it returns short-lived TURN credentials generated server-side.
 
 ## Security Model
 
@@ -138,8 +144,8 @@ Treat a session UUID like a temporary password:
 | Cleanup retention | 24 hours after expiry |
 | Command body | 64 KB |
 | Result body | 1 MB |
-| Direct candidate body | 4 KB |
-| Direct candidate TTL | 60 seconds, max 120 seconds |
+| Direct signal body | 32 KB |
+| Direct signal TTL | 60 seconds, max 120 seconds |
 | Timeout | 1 to 3600 seconds |
 
 ## Agent Resources
@@ -175,7 +181,7 @@ src/
     powershell.ts                   Generated PowerShell agent
     terminal-usage.ts               Root terminal usage text
   domain/session.ts                 Session domain types
-  domain/direct.ts                  Direct transport candidate types
+  domain/direct.ts                  Direct transport signal types
   client/direct-send.ts             Direct upgrade helper with relay fallback
   shared/                           Small generic utilities
 tests/
@@ -222,3 +228,9 @@ Required GitHub deployment secrets:
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
+
+Optional Cloudflare TURN secrets:
+
+- `TURN_KEY_ID`
+- `TURN_KEY_API_TOKEN`
+- `TURN_CREDENTIAL_TTL_SECONDS`

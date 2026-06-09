@@ -2,14 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { performance } from "node:perf_hooks";
 import { test } from "vitest";
 import { strict as assert } from "node:assert";
-import { publishDirectCandidate, sendWithDirectFallback } from "../../src/client/direct-send";
+import { publishDirectSignal, sendWithDirectFallback } from "../../src/client/direct-send";
 import { app } from "../../src/worker/app";
 import { createTestEnv } from "../helpers/fake-env";
 import { startAppServer } from "../helpers/server";
 
 console.info = () => {};
 
-test("direct upgrade sends commands to an agent candidate without using the relay data plane", async () => {
+test("direct upgrade sends commands to an agent signal without using the relay data plane", async () => {
   const fixture = createTestEnv();
   const control = await startAppServer(app, fixture);
   const direct = await startDirectServer(async (payload) => ({
@@ -22,12 +22,12 @@ test("direct upgrade sends commands to an agent candidate without using the rela
 
   try {
     const session = await createSession(control.baseUrl);
-    const candidate = await publishDirectCandidate(control.baseUrl, session.id, {
+    const signal = await publishDirectSignal(control.baseUrl, session.id, {
       role: "agent",
       url: `${direct.baseUrl}/command`,
       priority: 1
     });
-    assert.equal(candidate.status, 201);
+    assert.equal(signal.status, 201);
 
     const startedAt = performance.now();
     const response = await sendWithDirectFallback({
@@ -46,10 +46,10 @@ test("direct upgrade sends commands to an agent candidate without using the rela
     assert.ok(elapsedMs < 500, `direct upgrade took ${elapsedMs}ms`);
     assert.equal(direct.requests.length, 1);
     assert.equal(direct.requests[0]?.headers["x-soe-session-id"], session.id);
+    assert.ok(direct.requests[0]?.headers["x-soe-signal-id"]);
     assert.equal(control.requests.some((request) => request.path.includes("/send")), false);
     assert.equal(control.requests.some((request) => request.path.includes("/next")), false);
     assert.equal(control.requests.some((request) => request.path.includes("/result/")), false);
-    await waitForControlRequest(control.requests, "/direct-attempts");
   } finally {
     await direct.close();
     await control.close();
@@ -67,12 +67,12 @@ test("failed direct upgrade falls back to relay without waiting for command time
 
   try {
     const session = await createSession(control.baseUrl);
-    const candidate = await publishDirectCandidate(control.baseUrl, session.id, {
+    const signal = await publishDirectSignal(control.baseUrl, session.id, {
       role: "agent",
       url: `${badDirect.baseUrl}/missing`,
       priority: 1
     });
-    assert.equal(candidate.status, 201);
+    assert.equal(signal.status, 201);
 
     const startedAt = performance.now();
     const send = sendWithDirectFallback({
@@ -98,7 +98,6 @@ test("failed direct upgrade falls back to relay without waiting for command time
     assert.equal(await response.text(), "relay:fallback");
     assert.ok(elapsedMs < 1500, `fallback took ${elapsedMs}ms`);
     assert.equal(badDirect.requests.length, 1);
-    await waitForControlRequest(control.requests, "/direct-attempts");
     assert.equal(control.requests.some((request) => request.path.includes("/send")), true);
     assert.equal(control.requests.some((request) => request.path.includes("/next")), true);
     assert.equal(control.requests.some((request) => request.path.includes("/result/")), true);
@@ -167,12 +166,4 @@ async function requestBody(request: IncomingMessage): Promise<string> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForControlRequest(requests: Array<{ path: string }>, path: string): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (requests.some((request) => request.path.includes(path))) return;
-    await sleep(10);
-  }
-  throw new Error(`Timed out waiting for ${path}`);
 }

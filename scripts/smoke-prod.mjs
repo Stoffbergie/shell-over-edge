@@ -126,30 +126,32 @@ const hello = await request(`/api/sessions/${id}/hello`, {
 });
 assert(hello.response.ok, `agent hello returned ${hello.response.status}: ${hello.text}`);
 
-const candidate = await request(`/api/sessions/${id}/candidates`, {
+const ice = await request(`/api/sessions/${id}/ice`);
+assert(ice.response.ok, `ICE config returned ${ice.response.status}: ${ice.text}`);
+const icePayload = JSON.parse(ice.text);
+assert(Array.isArray(icePayload.iceServers), "ICE config did not return iceServers");
+assert(ice.text.includes("stun:stun.cloudflare.com:3478"), "ICE config did not include Cloudflare STUN fallback");
+
+const signal = await request(`/api/sessions/${id}/signals`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json"
   },
   body: '{"role":"agent","transport":"http","url":"http://127.0.0.1:9/direct","priority":1,"ttlSeconds":60}'
 });
-assert(candidate.response.status === 201, `direct candidate returned ${candidate.response.status}: ${candidate.text}`);
-const candidatePayload = JSON.parse(candidate.text);
-assert(candidatePayload.id, "direct candidate id missing");
-assert(candidatePayload.role === "agent", "direct candidate role is wrong");
+assert(signal.response.status === 201, `direct signal returned ${signal.response.status}: ${signal.text}`);
+const signalPayload = JSON.parse(signal.text);
+assert(signalPayload.id, "direct signal id missing");
+assert(signalPayload.role === "agent", "direct signal role is wrong");
 
-const candidates = await request(`/api/sessions/${id}/candidates?role=agent`);
-assert(candidates.response.ok, `direct candidate list returned ${candidates.response.status}: ${candidates.text}`);
-assert(candidates.text.includes(candidatePayload.id), "direct candidate list did not include published candidate");
+const signals = await request(`/api/sessions/${id}/signals?role=agent`);
+assert(signals.response.ok, `direct signal list returned ${signals.response.status}: ${signals.text}`);
+assert(signals.text.includes(signalPayload.id), "direct signal list did not include published signal");
 
-const directAttempt = await request(`/api/sessions/${id}/direct-attempts`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({ candidateId: candidatePayload.id, ok: false, latencyMs: 1, reason: "smoke" })
+const retiredDirectAttempt = await request(`/api/sessions/${id}/direct-attempts`, {
+  method: "POST"
 });
-assert(directAttempt.response.ok, `direct attempt returned ${directAttempt.response.status}: ${directAttempt.text}`);
+assert(retiredDirectAttempt.response.status === 404, `direct-attempts should be retired, got ${retiredDirectAttempt.response.status}`);
 
 const send = request(`/api/sessions/${id}/send`, {
   method: "POST",

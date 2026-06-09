@@ -9,10 +9,13 @@ Shell Over Edge creates short-lived UUID sessions. A generated agent script runs
 - Create POSIX session: `POST /api/sessions`
 - Create PowerShell session: `POST /api/sessions.ps1`
 - Send command: `POST /api/sessions/<uuid>/send`
-- Publish direct candidate: `POST /api/sessions/<uuid>/candidates`
-- List direct candidates: `GET /api/sessions/<uuid>/candidates?role=agent`
-- Report direct attempt: `POST /api/sessions/<uuid>/direct-attempts`
 - End session: `POST /api/sessions/<uuid>/end`
+
+## Direct Internals
+
+- Get ICE config: `GET /api/sessions/<uuid>/ice`
+- Publish direct signal: `POST /api/sessions/<uuid>/signals`
+- List direct signals: `GET /api/sessions/<uuid>/signals?role=agent`
 
 ## Quick Use
 
@@ -42,12 +45,18 @@ Use JSON only when setting options:
 
 ## Direct Upgrade
 
-The relay route is the universal fallback. Rich helpers can use the public service as rendezvous: publish short-lived `http` candidates, list agent candidates, try a direct command POST with a small timeout, report the attempt, then fall back to `/send` if direct fails.
+The relay route is the universal fallback. Rich helpers can use the public service as rendezvous: fetch ICE config when using WebRTC, exchange short-lived direct signals, try a direct stream with a small timeout, then fall back to `/send` if direct fails.
 
-Candidate payload:
+HTTP direct signal payload:
 
 ```json
 {"role":"agent","transport":"http","url":"http://127.0.0.1:9000/command","priority":1,"ttlSeconds":60}
+```
+
+WebRTC offer signal payload:
+
+```json
+{"role":"client","transport":"webrtc","data":{"type":"offer","sdp":"v=0\r\n"},"priority":1,"ttlSeconds":60}
 ```
 
 Direct command endpoints should accept the same JSON command payload and return plain command output with `X-Exit-Code` when available.
@@ -63,8 +72,8 @@ Direct command endpoints should accept the same JSON command payload and return 
 - Retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, and `/connect.sh` are invalid.
 - Command body limit: 64 KB.
 - Result body limit: 1 MB.
-- Direct candidate body limit: 4 KB.
-- Direct candidate TTL: 60 seconds by default, 120 seconds max.
+- Direct signal body limit: 32 KB.
+- Direct signal TTL: 60 seconds by default, 120 seconds max.
 - Session TTL: 2 hours.
 - Expired session cleanup retention: 24 hours.
 

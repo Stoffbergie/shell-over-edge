@@ -198,52 +198,69 @@ test("late known command results are acknowledged after helper timeout", async (
   assert.equal(await text(unknown), "Command not found\n");
 });
 
-test("sessions exchange short-lived direct transport candidates", async () => {
+test("sessions exchange short-lived direct transport signals", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);
 
-  const invalid = await app.request(`/api/sessions/${session.id}/candidates`, {
+  const invalid = await app.request(`/api/sessions/${session.id}/signals`, {
     method: "POST",
     body: '{"role":"agent","url":"ftp://127.0.0.1/direct"}'
   }, fixture.env, fixture.ctx);
   assert.equal(invalid.status, 400);
-  assert.equal(await text(invalid), "Invalid direct candidate\n");
+  assert.equal(await text(invalid), "Invalid direct signal\n");
 
-  const published = await app.request(`/api/sessions/${session.id}/candidates`, {
+  const published = await app.request(`/api/sessions/${session.id}/signals`, {
     method: "POST",
     body: '{"role":"agent","transport":"http","url":"http://127.0.0.1:9999/direct","priority":5,"ttlSeconds":30}'
   }, fixture.env, fixture.ctx);
   assert.equal(published.status, 201);
-  const candidate = await published.json() as { id: string; role: string; transport: string; url: string; priority: number };
-  assert.ok(candidate.id);
-  assert.equal(candidate.role, "agent");
-  assert.equal(candidate.transport, "http");
-  assert.equal(candidate.url, "http://127.0.0.1:9999/direct");
-  assert.equal(candidate.priority, 5);
+  const signal = await published.json() as { id: string; role: string; transport: string; url: string; priority: number };
+  assert.ok(signal.id);
+  assert.equal(signal.role, "agent");
+  assert.equal(signal.transport, "http");
+  assert.equal(signal.url, "http://127.0.0.1:9999/direct");
+  assert.equal(signal.priority, 5);
 
-  const client = await app.request(`/api/sessions/${session.id}/candidates`, {
+  const offer = await app.request(`/api/sessions/${session.id}/signals`, {
+    method: "POST",
+    body: JSON.stringify({ role: "client", transport: "webrtc", data: { type: "offer", sdp: "v=0\r\n" }, priority: 1 })
+  }, fixture.env, fixture.ctx);
+  assert.equal(offer.status, 201);
+  const offerSignal = await offer.json() as { role: string; transport: string; data: { kind: string; sdp: string } };
+  assert.equal(offerSignal.role, "client");
+  assert.equal(offerSignal.transport, "webrtc");
+  assert.equal(offerSignal.data.kind, "offer");
+  assert.equal(offerSignal.data.sdp, "v=0\r\n");
+
+  const client = await app.request(`/api/sessions/${session.id}/signals`, {
     method: "POST",
     body: '{"role":"client","transport":"http","url":"http://127.0.0.1:8888/direct","priority":50}'
   }, fixture.env, fixture.ctx);
   assert.equal(client.status, 201);
 
-  const agents = await app.request(`/api/sessions/${session.id}/candidates?role=agent`, {}, fixture.env, fixture.ctx);
+  const agents = await app.request(`/api/sessions/${session.id}/signals?role=agent`, {}, fixture.env, fixture.ctx);
   assert.equal(agents.status, 200);
-  const listed = await agents.json() as { candidates: Array<{ id: string; role: string; priority: number }> };
-  assert.equal(listed.candidates.length, 1);
-  assert.equal(listed.candidates[0]?.id, candidate.id);
-  assert.equal(listed.candidates[0]?.role, "agent");
+  const listed = await agents.json() as { signals: Array<{ id: string; role: string; priority: number }> };
+  assert.equal(listed.signals.length, 1);
+  assert.equal(listed.signals[0]?.id, signal.id);
+  assert.equal(listed.signals[0]?.role, "agent");
 
-  const badRole = await app.request(`/api/sessions/${session.id}/candidates?role=helper`, {}, fixture.env, fixture.ctx);
+  const badRole = await app.request(`/api/sessions/${session.id}/signals?role=helper`, {}, fixture.env, fixture.ctx);
   assert.equal(badRole.status, 400);
-  assert.equal(await text(badRole), "Invalid direct candidate role\n");
+  assert.equal(await text(badRole), "Invalid direct signal role\n");
+});
 
-  const attempt = await app.request(`/api/sessions/${session.id}/direct-attempts`, {
-    method: "POST",
-    body: JSON.stringify({ candidateId: candidate.id, ok: false, latencyMs: 32, reason: "http-404" })
-  }, fixture.env, fixture.ctx);
-  assert.equal(attempt.status, 200);
-  assert.equal(await text(attempt), "ok\n");
+test("sessions return default ICE config without TURN secrets", async () => {
+  const fixture = createTestEnv();
+  const session = await createSession(app, fixture);
+
+  const response = await app.request(`/api/sessions/${session.id}/ice`, {}, fixture.env, fixture.ctx);
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { iceServers: Array<{ urls: string[] }>; source: string; turnEnabled: boolean; ttlSeconds: number };
+  assert.equal(payload.source, "cloudflare-stun");
+  assert.equal(payload.turnEnabled, false);
+  assert.equal(payload.ttlSeconds, 7200);
+  assert.deepEqual(payload.iceServers, [{ urls: ["stun:stun.cloudflare.com:3478"] }]);
 });
 
 test("invalid sessions, bad send payloads, and retired routes return text errors", async () => {
@@ -264,6 +281,8 @@ test("invalid sessions, bad send payloads, and retired routes return text errors
   assert.equal((await app.request(`/api/agent/${session.id}/next`, {}, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request(`/api/sessions/${session.id}/commands`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request(`/api/sessions/${session.id}/upload`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/api/sessions/${session.id}/candidates`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/api/sessions/${session.id}/direct-attempts`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request("/connect.sh", {}, fixture.env, fixture.ctx)).status, 404);
 
   const end = await app.request(`/api/sessions/${session.id}/end`, { method: "POST" }, fixture.env, fixture.ctx);
