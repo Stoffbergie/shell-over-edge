@@ -33,10 +33,11 @@
   "homepage": "https://soe.stoff.dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Stoffberg/soe.git"
+    "url": "https://github.com/Stoffberg/shell-over-edge.git"
   },
   "bugs": {
-    "url": "https://github.com/Stoffberg/soe/issues"
+    "url": "https://github.com/Stoffberg/shell-over-edge/issues"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "description": "Temporary shell and file access through Cloudflare Workers."
 }
