@@ -76,7 +76,7 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
 
 test.skipIf(!powerShell)("generated PowerShell agent parses", async () => {
   await assertPowerShellParses(powerShell, powerShellAgentScript("https://soe.test", meta));
-});
+}, 30_000);
 
 async function assertShellSyntax(sh: string, script: string): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "soe-shell-"));
@@ -91,7 +91,8 @@ async function assertPowerShellParses(powerShell: string, script: string): Promi
   const dir = await mkdtemp(join(tmpdir(), "soe-pwsh-"));
   const file = join(dir, "agent.ps1");
   await writeFile(file, script);
-  const result = spawnSync(powerShell, ["-NoProfile", "-Command", `[scriptblock]::Create((Get-Content -Raw ${JSON.stringify(file)})) | Out-Null`], { encoding: "utf8" });
+  const result = spawnSync(powerShell, ["-NoProfile", "-Command", `[scriptblock]::Create((Get-Content -Raw ${JSON.stringify(file)})) | Out-Null`], { encoding: "utf8", timeout: 25_000 });
   await rm(dir, { force: true, recursive: true });
+  assert.equal(result.error, undefined, result.error?.message || result.stderr);
   assert.equal(result.status, 0, result.stderr);
 }
