@@ -3,12 +3,14 @@ import { powerShellAgentScript } from "../../agent/powershell";
 import { shellAgentScript } from "../../agent/shell";
 import type { SessionMeta } from "../../domain/session";
 import { maxCommandBytes, maxDirectSignalBytes, sessionTtlMs } from "../../shared/config";
+import { randomSessionCode } from "../../shared/crypto";
 import { BadRequestError, cleanString, jsonResponse, normalizeTimeout, publicBaseUrl, readLimitedText, textResponse } from "../../shared/http";
 import { logInfo } from "../../shared/log";
 import type { Env } from "../env";
 import { getIceServers } from "../services/ice-servers";
 import { sessionBridge } from "../services/session-bridge";
 import {
+  codeKey,
   expireIfNeeded,
   getJson,
   metaKey,
@@ -21,6 +23,7 @@ type SessionGuard = { meta: SessionMeta } | { response: Response };
 type ScriptKind = "shell" | "powershell";
 
 const sessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const sessionCodePattern = /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
 
 export function registerSessionRoutes(app: SessionApp): void {
   app.post("/api/sessions", (c) => createSession(c, "shell"));
@@ -38,14 +41,17 @@ export function registerSessionRoutes(app: SessionApp): void {
 async function createSession(c: SessionContext, kind: ScriptKind): Promise<Response> {
   const now = Date.now();
   const id = crypto.randomUUID().toLowerCase();
+  const code = await createSessionCode(c.env);
   const meta: SessionMeta = {
     id,
+    code,
     status: "waiting",
     createdAt: now,
     expiresAt: now + sessionTtlMs
   };
   await putJson(c.env, metaKey(id), meta);
-  logInfo("session_created", { sessionId: id, expiresAt: meta.expiresAt });
+  await putJson(c.env, codeKey(code), { id });
+  logInfo("session_created", { sessionId: id, code, expiresAt: meta.expiresAt });
 
   const baseUrl = publicBaseUrl(c.req.raw, c.env);
   const body = kind === "shell" ? shellAgentScript(baseUrl, meta) : powerShellAgentScript(baseUrl, meta);
@@ -53,7 +59,9 @@ async function createSession(c: SessionContext, kind: ScriptKind): Promise<Respo
     headers: {
       "Cache-Control": "no-store",
       "Content-Type": kind === "shell" ? "text/x-shellscript; charset=utf-8" : "text/plain; charset=utf-8",
-      "X-Session-Id": id
+      "X-Session-Id": code,
+      "X-Session-Code": code,
+      "X-Session-Internal-Id": id
     }
   });
 }
@@ -142,7 +150,7 @@ async function endSession(c: SessionContext): Promise<Response> {
 }
 
 async function requireSession(env: Env, id: string | undefined, options: { allowInactive?: boolean } = {}): Promise<SessionGuard> {
-  const sessionId = safeSessionId(id);
+  const sessionId = await resolveSessionId(env, id);
   if (!sessionId) return { response: textResponse("Session not found\n", 404) };
 
   const meta = await getJson<SessionMeta>(env, metaKey(sessionId));
@@ -152,6 +160,22 @@ async function requireSession(env: Env, id: string | undefined, options: { allow
   if (!options.allowInactive && fresh.status === "ended") return { response: textResponse("Session ended\n", 410) };
   if (!options.allowInactive && fresh.status === "expired") return { response: textResponse("Session expired\n", 410) };
   return { meta: fresh };
+}
+
+async function createSessionCode(env: Env): Promise<string> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const code = randomSessionCode();
+    if (!await getJson<{ id: string }>(env, codeKey(code))) return code;
+  }
+  throw new Error("Could not allocate session code");
+}
+
+async function resolveSessionId(env: Env, id: string | undefined): Promise<string> {
+  const value = cleanString(id, 80).toLowerCase();
+  if (sessionIdPattern.test(value)) return value;
+  if (!sessionCodePattern.test(value)) return "";
+  const record = await getJson<{ id?: unknown }>(env, codeKey(value));
+  return typeof record?.id === "string" && sessionIdPattern.test(record.id) ? record.id : "";
 }
 
 async function readCommandInput(request: Request): Promise<{ body: string; cwd: string; timeoutSeconds: number }> {
@@ -175,9 +199,4 @@ async function readCommandInput(request: Request): Promise<{ body: string; cwd: 
     cwd: cleanString(payload.cwd, 500),
     timeoutSeconds: normalizeTimeout(payload.timeoutSeconds ?? payload.timeout ?? defaultTimeout)
   };
-}
-
-function safeSessionId(id: string | undefined): string {
-  const value = cleanString(id, 80).toLowerCase();
-  return sessionIdPattern.test(value) ? value : "";
 }

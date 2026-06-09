@@ -4,6 +4,20 @@ export function randomId(): string {
   return `${Date.now()}-${randomBase64Url(8)}`;
 }
 
+export function randomSessionCode(): string {
+  const alphabet = "23456789abcdefghjkmnpqrstuvwxyz";
+  let value = "";
+  while (value.length < 8) {
+    const bytes = crypto.getRandomValues(new Uint8Array(8));
+    for (const byte of bytes) {
+      if (byte >= 248) continue;
+      value += alphabet[byte % alphabet.length];
+      if (value.length === 8) break;
+    }
+  }
+  return value;
+}
+
 function randomBase64Url(size: number): string {
   const bytes = crypto.getRandomValues(new Uint8Array(size));
   let value = "";

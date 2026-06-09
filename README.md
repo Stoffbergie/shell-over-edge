@@ -6,7 +6,7 @@
 
 Reach any shell from anywhere.
 
-Start a tiny generated agent on one machine, then send commands to it from any other machine over plain HTTPS. No dashboard. No account flow. A session UUID is the capability.
+Start a tiny agent on one machine, then send commands to it from any other machine over plain HTTPS. No dashboard. No account flow. An 8-character session code is the capability.
 
 Production: [https://soe.stoff.dev](https://soe.stoff.dev)
 
@@ -19,10 +19,12 @@ sequenceDiagram
     participant Bridge as Durable Object
     participant Agent as Generated Agent
 
+    Helper->>Worker: GET /a
+    Worker-->>Helper: bootstrap script
     Helper->>Worker: POST /api/sessions
-    Worker-->>Helper: agent script + X-Session-Id
+    Worker-->>Helper: relay agent script + X-Session-Id
 
-    Note over Agent: run script on target machine
+    Note over Agent: relay starts immediately; native download can race in background
     Agent->>Worker: POST /api/sessions/:id/hello
     Agent->>Worker: GET /api/sessions/:id/next
     Worker->>Bridge: wait for command
@@ -51,42 +53,44 @@ R2 stores session metadata. The Durable Object coordinates the live command hand
 Start a POSIX agent on the target machine:
 
 ```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions | sh
+curl -sS https://soe.stoff.dev/a | sh
 ```
 
 Start a PowerShell agent on the target machine:
 
 ```powershell
-irm -Method Post https://soe.stoff.dev/api/sessions.ps1 | iex
+irm https://soe.stoff.dev/a.ps1 | iex
 ```
 
-The agent prints the UUID and copies it to the clipboard when possible. The create response also returns it in `X-Session-Id`.
+The agent prints the session code and copies it to the clipboard when possible. The create response also returns it in `X-Session-Id`.
 
 Send a command:
 
 ```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/send --data 'pwd'
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'pwd'
 ```
 
 End the session:
 
 ```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/end
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end
 ```
 
 ## Core API
 
 | Endpoint | Body | Response |
 | --- | --- | --- |
+| `GET /a` | empty | POSIX bootstrap script |
+| `GET /a.ps1` | empty | PowerShell bootstrap script |
 | `POST /api/sessions` | empty | POSIX shell agent script |
 | `POST /api/sessions.ps1` | empty | PowerShell agent script |
-| `POST /api/sessions/<uuid>/send` | raw text or JSON | plain command output |
-| `POST /api/sessions/<uuid>/end` | empty | `ended` |
+| `POST /api/sessions/<code>/send` | raw text or JSON | plain command output |
+| `POST /api/sessions/<code>/end` | empty | `ended` |
 
 For simple commands, send raw text:
 
 ```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/send --data 'uname -a'
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'uname -a'
 ```
 
 Use JSON only when you need options:
@@ -109,9 +113,9 @@ Clients that can run a richer helper may use the Worker as a rendezvous plane:
 
 | Endpoint | Body | Response |
 | --- | --- | --- |
-| `GET /api/sessions/<uuid>/ice` | empty | ICE server JSON |
-| `POST /api/sessions/<uuid>/signals` | signal JSON | signal JSON |
-| `GET /api/sessions/<uuid>/signals?role=agent` | empty | signal list JSON |
+| `GET /api/sessions/<code>/ice` | empty | ICE server JSON |
+| `POST /api/sessions/<code>/signals` | signal JSON | signal JSON |
+| `GET /api/sessions/<code>/signals?role=agent` | empty | signal list JSON |
 
 The direct upgrade is deliberately small:
 
@@ -126,11 +130,11 @@ Without TURN secrets, `/ice` returns Cloudflare STUN only. With Cloudflare TURN 
 
 ## Security Model
 
-Sessions are UUID capabilities. Anyone with the UUID can use that session until it ends or expires.
+Sessions are short code capabilities. Anyone with the code can use that session until it ends or expires.
 
 There are no bearer tokens, helper tokens, agent tokens, URL tokens, or auth headers in the current API.
 
-Treat a session UUID like a temporary password:
+Treat a session code like a temporary password:
 
 - keep it out of logs and screenshots
 - end the session when finished
@@ -162,7 +166,8 @@ Treat a session UUID like a temporary password:
 - Durable Objects for live command coordination
 - R2 for session metadata and cleanup
 - TypeScript for the Worker and generated agent builders
-- Vitest for unit, integration, generated-agent, and direct-upgrade e2e tests
+- Zig for the optional native agent
+- Vitest for unit, integration, generated-agent, native-agent, container, and direct-upgrade e2e tests
 
 ## Repo Layout
 
@@ -177,9 +182,12 @@ src/
     services/session-bridge.ts      Durable Object lookup boundary
     services/session-store.ts       R2 session metadata and cleanup
   agent/
+    bootstrap.ts                    Tiny bootstrap scripts with native upgrade race
     shell.ts                        Generated POSIX agent
     powershell.ts                   Generated PowerShell agent
     terminal-usage.ts               Root terminal usage text
+native/
+  agent/main.zig                    Optional native relay agent
   domain/session.ts                 Session domain types
   domain/direct.ts                  Direct transport signal types
   client/direct-send.ts             Direct upgrade helper with relay fallback
@@ -187,9 +195,10 @@ src/
 tests/
   unit/                             Pure utilities and generated script checks
   integration/                      Worker request/response flows with fake bindings
-  e2e/                              Generated agent and direct-upgrade flows
+  e2e/                              Generated agent, native agent, container, and direct-upgrade flows
   helpers/                          Typed test harnesses
 scripts/
+  build-native-linux.mjs            Cross-build native Linux binary for container tests
   repo-audit.mjs                    Repo hygiene checks
   smoke-prod.mjs                    Live production smoke test
 ```
@@ -215,10 +224,16 @@ Relay/direct load e2e:
 pnpm run test:load
 ```
 
+Native agent e2e:
+
+```sh
+pnpm run test:native
+```
+
 Linux container agent e2e, requiring Docker:
 
 ```sh
-SOE_DOCKER_E2E=1 pnpm exec vitest run tests/e2e/linux-container-agent.test.ts
+pnpm run test:containers
 ```
 
 ## Cloudflare

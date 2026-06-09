@@ -98,10 +98,21 @@ function sleep(ms) {
 const root = await request("/");
 assert(root.response.ok, `GET / returned ${root.response.status}`);
 assert(root.text.includes("Shell Over Edge"), "GET / did not return Shell Over Edge usage");
-assert(root.text.includes("/api/sessions/<uuid>/send"), "GET / did not return simplified send usage");
+assert(root.text.includes("/api/sessions/<code>/send"), "GET / did not return simplified send usage");
+assert(root.text.includes(`${baseUrl}/a | sh`), "GET / did not return bootstrap usage");
 
 const legacy = await request("/connect.sh");
 assert(legacy.response.status === 404, `legacy connect.sh should be disabled, got ${legacy.response.status}`);
+
+const bootstrap = await request("/a");
+assert(bootstrap.response.ok, `GET /a returned ${bootstrap.response.status}: ${bootstrap.text}`);
+assert(bootstrap.text.includes("SOE_NO_END_ON_EXIT=1 sh \"$AGENT_FILE\""), "POSIX bootstrap does not start relay with upgrade-safe mode");
+assert(bootstrap.text.includes("download_native"), "POSIX bootstrap does not include native download path");
+
+const psBootstrap = await request("/a.ps1");
+assert(psBootstrap.response.ok, `GET /a.ps1 returned ${psBootstrap.response.status}: ${psBootstrap.text}`);
+assert(psBootstrap.text.includes("$env:SOE_NO_END_ON_EXIT = \"1\""), "PowerShell bootstrap does not start relay with upgrade-safe mode");
+assert(psBootstrap.text.includes("Start-NativeDownload"), "PowerShell bootstrap does not include native download path");
 
 const session = await request("/api/sessions", {
   method: "POST"
@@ -109,7 +120,7 @@ const session = await request("/api/sessions", {
 assert(session.response.ok, `POST /api/sessions returned ${session.response.status}: ${session.text}`);
 
 const id = session.response.headers["x-session-id"];
-assert(isUuidV4(id), "session id header missing");
+assert(isSessionCode(id), "session code header missing");
 assert(session.text.startsWith("#!/bin/sh"), "session response is not a shell script");
 assert(session.text.includes(`/api/sessions/$SESSION_ID/next`), "shell script does not poll the simplified session route");
 assert(!session.text.includes("Authorization"), "shell script should not use authorization headers");
@@ -120,7 +131,7 @@ const powerShell = await request("/api/sessions.ps1", {
 });
 assert(powerShell.response.ok, `POST /api/sessions.ps1 returned ${powerShell.response.status}: ${powerShell.text}`);
 const powerShellId = powerShell.response.headers["x-session-id"];
-assert(isUuidV4(powerShellId), "PowerShell session id header missing");
+assert(isSessionCode(powerShellId), "PowerShell session code header missing");
 assert(powerShell.text.includes(`$SessionId = "${powerShellId}"`), "PowerShell script does not embed its session id");
 assert(powerShell.text.includes("/api/sessions/$SessionId/next"), "PowerShell script does not poll the simplified session route");
 assert(!powerShell.text.includes("Authorization"), "PowerShell script should not use authorization headers");
@@ -201,8 +212,8 @@ const blocked = await request(`/api/sessions/${id}/send`, {
 assert(blocked.response.status === 410, `ended session send should be 410, got ${blocked.response.status}`);
 assert(blocked.text === "Session ended\n", "ended session send payload is wrong");
 
-function isUuidV4(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value || "");
+function isSessionCode(value) {
+  return /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/.test(value || "");
 }
 
 console.log(`production smoke passed for ${baseUrl}`);

@@ -5,7 +5,7 @@ export function shellAgentScript(baseUrl: string, meta: SessionMeta): string {
   return `#!/bin/sh
 set -u
 BASE_URL=${quoteShell(baseUrl)}
-SESSION_ID=${quoteShell(meta.id)}
+SESSION_ID=${quoteShell(meta.code)}
 EXPIRES=${quoteShell(new Date(meta.expiresAt).toISOString())}
 
 copy_text() {
@@ -37,6 +37,9 @@ header_value() {
 }
 
 post_bye() {
+  if [ "\${SOE_NO_END_ON_EXIT:-}" = "1" ]; then
+    return 0
+  fi
   curl -fsS -X POST "$BASE_URL/api/sessions/$SESSION_ID/end" >/dev/null 2>&1 || true
 }
 

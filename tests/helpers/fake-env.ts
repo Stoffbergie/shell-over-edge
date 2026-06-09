@@ -61,6 +61,7 @@ export async function text(response: Response): Promise<string> {
 export async function createSession(app: Hono<{ Bindings: Env }>, fixture: TestFixture, path = "/api/sessions"): Promise<{
   id: string;
   code: string;
+  internalId: string;
   script: string;
   contentType: string;
 }> {
@@ -69,8 +70,10 @@ export async function createSession(app: Hono<{ Bindings: Env }>, fixture: TestF
   }, fixture.env, fixture.ctx);
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
-  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-  return { id, code: id, script: await response.text(), contentType: response.headers.get("Content-Type") || "" };
+  const internalId = response.headers.get("X-Session-Internal-Id") || "";
+  assert.match(id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
+  assert.match(internalId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  return { id, code: id, internalId, script: await response.text(), contentType: response.headers.get("Content-Type") || "" };
 }
 
 export class TestExecutionContext {

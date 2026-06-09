@@ -73,11 +73,15 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
       - name: Install
         run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Test
-        run: pnpm run test
+        run: pnpm run test && pnpm run test:native
 
       - name: Ensure tests did not modify files
         run: git diff --exit-code
@@ -98,11 +102,15 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
       - name: Install
         run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Test generated agents in Linux containers
-        run: SOE_DOCKER_E2E=1 pnpm exec vitest run tests/e2e/linux-container-agent.test.ts
+        run: pnpm run test:containers
 
       - name: Ensure tests did not modify files
         run: git diff --exit-code

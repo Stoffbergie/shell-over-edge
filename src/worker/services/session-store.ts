@@ -18,6 +18,7 @@ export async function cleanupExpiredSessions(env: Env): Promise<void> {
     }
     if (now >= meta.expiresAt + cleanupRetentionMs) {
       await deletePrefix(env, `sessions/${meta.id}/`);
+      if (meta.code) await env.SOE_MAILBOX.delete(codeKey(meta.code));
     }
   }
 }
@@ -61,4 +62,8 @@ export async function getJson<T>(env: Env, key: string): Promise<T | null> {
 
 export function metaKey(id: string): string {
   return `sessions/${id}/meta.json`;
+}
+
+export function codeKey(code: string): string {
+  return `codes/${code}.json`;
 }

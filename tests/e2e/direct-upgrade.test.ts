@@ -111,7 +111,7 @@ async function createSession(baseUrl: string): Promise<{ id: string }> {
   const response = await fetch(`${baseUrl}/api/sessions`, { method: "POST" });
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
-  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.match(id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
   await response.text();
   return { id };
 }
