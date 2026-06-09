@@ -1,0 +1,81 @@
+name: Build and deploy
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    branches:
+      - main
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      smoke_only:
+        description: Run production smoke checks without deploying
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy Worker
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      SOE_BASE_URL: https://soe.stoff.dev
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Check
+        if: ${{ inputs.smoke_only != true }}
+        run: pnpm run check
+
+      - name: Validate Worker bundle
+        if: ${{ inputs.smoke_only != true }}
+        run: pnpm run dry-run
+
+      - name: Deploy
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' && inputs.smoke_only != true }}
+        run: pnpm wrangler deploy
+
+      - name: Skip deploy
+        if: ${{ env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == '' || inputs.smoke_only == true }}
+        run: echo "Cloudflare deploy skipped."
+
+      - name: Production smoke checks
+        if: ${{ success() && (inputs.smoke_only == true || (env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '')) }}
+        run: pnpm run smoke:prod
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          {
+            echo "### Deployment"
+            echo "- SHA: ${{ github.event.workflow_run.head_sha || github.sha }}"
+            echo "- Event: ${{ github.event_name }}"
+            echo "- Smoke only: ${{ inputs.smoke_only }}"
+          } >> "$GITHUB_STEP_SUMMARY"

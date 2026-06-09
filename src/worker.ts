@@ -2,9 +2,10 @@ import { Hono } from "hono";
 import { DurableObject } from "cloudflare:workers";
 
 type Env = {
-  REMOTE_MAILBOX: R2Bucket;
+  SOE_MAILBOX: R2Bucket;
   COMMAND_BRIDGES: DurableObjectNamespace<CommandBridge>;
   BASE_URL?: string;
+  ENABLE_LEGACY_BRIDGE?: string;
 };
 
 type SessionStatus = "waiting" | "connected" | "agent_stopped" | "ended" | "expired";
@@ -64,28 +65,6 @@ type EventRecord = {
   size?: number;
 };
 
-type SimpleAgentState = {
-  code: string;
-  status: "connected" | "stopped";
-  connectedAt: number;
-  seenAt: number;
-  platform?: string;
-  user?: string;
-  cwd?: string;
-};
-
-type SimpleCommandRecord = {
-  id: string;
-  status: CommandStatus;
-  body: string;
-  createdAt: number;
-  startedAt?: number;
-  completedAt?: number;
-  timeoutSeconds: number;
-  exitCode?: number;
-  output?: string;
-};
-
 type CommandWaiter = {
   commandId: string;
   resolve: (response: Response) => void;
@@ -102,6 +81,14 @@ const maxFileBytes = 1024 * 1024;
 const maxResultBytes = 1024 * 1024;
 const maxCommandBytes = 64 * 1024;
 const textEncoder = new TextEncoder();
+
+class PayloadTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`Request body exceeds ${maxBytes} bytes`);
+  }
+}
+
+class BadRequestError extends Error {}
 
 export class CommandBridge extends DurableObject<Env> {
   private agentWriter?: WritableStreamDefaultWriter<Uint8Array>;
@@ -224,6 +211,16 @@ export class CommandBridge extends DurableObject<Env> {
   }
 }
 
+app.onError((error) => {
+  if (error instanceof PayloadTooLargeError) {
+    return jsonResponse({ error: error.message }, 413);
+  }
+  if (error instanceof BadRequestError) {
+    return jsonResponse({ error: error.message }, 400);
+  }
+  return jsonResponse({ error: "Internal server error" }, 500);
+});
+
 app.use("*", async (c, next) => {
   await next();
   const headers = new Headers(c.res.headers);
@@ -236,6 +233,7 @@ app.use("*", async (c, next) => {
 });
 
 app.post("/", async (c) => {
+  if (!legacyBridgeEnabled(c.env)) return jsonResponse({ error: "Legacy bridge disabled" }, 404);
   const code = apiKey(c.req.raw);
   if (!code) return textResponse("Missing or invalid x-api-key UUID", 401);
   const body = (await readLimitedText(c.req.raw, maxCommandBytes)).trim();
@@ -251,16 +249,18 @@ app.post("/", async (c) => {
 });
 
 app.get("/", (c) => textResponse(terminalUsage(publicBaseUrl(c.req.raw, c.env))));
-app.get("/connect.sh", (c) => textResponse(simpleShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/x-shellscript"));
-app.get("/connect.ps1", (c) => textResponse(simplePowerShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/plain; charset=utf-8"));
+app.get("/connect.sh", (c) => legacyBridgeEnabled(c.env) ? textResponse(simpleShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/x-shellscript") : textResponse("Not found\n", 404));
+app.get("/connect.ps1", (c) => legacyBridgeEnabled(c.env) ? textResponse(simplePowerShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/plain; charset=utf-8") : textResponse("Not found\n", 404));
 
 app.get("/api/v1/:code/events", async (c) => {
+  if (!legacyBridgeEnabled(c.env)) return jsonResponse({ error: "Not found" }, 404);
   const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
   if ("response" in guard) return guard.response;
   return bridgeStub(c.env, guard.code).fetch("https://bridge/events");
 });
 
 app.post("/api/v1/:code/result/:commandId", async (c) => {
+  if (!legacyBridgeEnabled(c.env)) return jsonResponse({ error: "Not found" }, 404);
   const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
   if ("response" in guard) return guard.response;
   const commandId = cleanString(c.req.param("commandId"), 200);
@@ -271,6 +271,7 @@ app.post("/api/v1/:code/result/:commandId", async (c) => {
 });
 
 app.post("/api/v1/:code/bye", async (c) => {
+  if (!legacyBridgeEnabled(c.env)) return jsonResponse({ error: "Not found" }, 404);
   const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
   if ("response" in guard) return guard.response;
   return bridgeStub(c.env, guard.code).fetch("https://bridge/bye", { method: "POST" });
@@ -302,7 +303,7 @@ app.post("/api/sessions", async (c) => {
     message: `Session ${code} created for ${helperName}`,
     status: meta.status
   });
-  logInfo("session_created", { sessionId: id, code, expiresAt: meta.expiresAt });
+  logInfo("session_created", { sessionId: id, expiresAt: meta.expiresAt });
   const baseUrl = publicBaseUrl(c.req.raw, c.env);
   return jsonResponse({
     id,
@@ -312,8 +313,8 @@ app.post("/api/sessions", async (c) => {
     expiresAt: meta.expiresAt,
     helperToken,
     agentToken,
-    shellCommand: `curl -fsSL ${quoteShell(`${baseUrl}/start/${code}.sh?token=${encodeURIComponent(agentToken)}`)} | sh`,
-    windowsCommand: `irm "${baseUrl}/start/${code}.ps1?token=${encodeURIComponent(agentToken)}" | iex`
+    shellCommand: `curl -fsSL -H ${quoteShell(`Authorization: Bearer ${agentToken}`)} ${quoteShell(`${baseUrl}/start/${code}.sh`)} | sh`,
+    windowsCommand: `$headers = @{ Authorization = ${quotePowerShell(`Bearer ${agentToken}`)} }; irm -Headers $headers ${quotePowerShell(`${baseUrl}/start/${code}.ps1`)} | iex`
   });
 });
 
@@ -327,7 +328,7 @@ app.post("/api/sessions/:id/commands", async (c) => {
   const guard = await requireHelper(c.env, c.req.raw, c.req.param("id"));
   if ("response" in guard) return guard.response;
   const payload = await readJson<{ body?: string; cwd?: string; timeoutSeconds?: number }>(c.req.raw);
-  const body = cleanString(payload.body, maxResultBytes).trim();
+  const body = cleanString(payload.body, maxCommandBytes).trim();
   if (!body) return jsonResponse({ error: "Command is required" }, 400);
   const command = await enqueueCommand(c.env, guard.meta.id, {
     type: "shell",
@@ -340,7 +341,7 @@ app.post("/api/sessions/:id/commands", async (c) => {
     message: `Queued command ${command.id}`,
     commandId: command.id
   });
-  logInfo("command_queued", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, commandType: command.type });
+  logInfo("command_queued", { sessionId: guard.meta.id, commandId: command.id, commandType: command.type });
   return jsonResponse({ commandId: command.id });
 });
 
@@ -367,7 +368,7 @@ app.post("/api/sessions/:id/end", async (c) => {
     message: `Session ${meta.code} ended`,
     status: meta.status
   });
-  logInfo("session_ended", { sessionId: meta.id, code: meta.code });
+  logInfo("session_ended", { sessionId: meta.id });
   return jsonResponse({ ok: true, status: meta.status });
 });
 
@@ -383,7 +384,7 @@ app.post("/api/sessions/:id/upload", async (c) => {
   if (bytes.byteLength > maxFileBytes) return jsonResponse({ error: "File exceeds 1 MB" }, 413);
   const uploadId = randomId();
   const uploadKey = `sessions/${guard.meta.id}/uploads/${uploadId}`;
-  await c.env.REMOTE_MAILBOX.put(uploadKey, bytes, {
+  await c.env.SOE_MAILBOX.put(uploadKey, bytes, {
     httpMetadata: { contentType: file.type || "application/octet-stream" },
     customMetadata: {
       name: file.name,
@@ -406,7 +407,7 @@ app.post("/api/sessions/:id/upload", async (c) => {
     path,
     size: bytes.byteLength
   });
-  logInfo("upload_queued", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, bytes: bytes.byteLength });
+  logInfo("upload_queued", { sessionId: guard.meta.id, commandId: command.id, bytes: bytes.byteLength });
   return jsonResponse({ commandId: command.id, uploadId });
 });
 
@@ -429,7 +430,7 @@ app.post("/api/sessions/:id/download", async (c) => {
     commandId: command.id,
     path
   });
-  logInfo("download_queued", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id });
+  logInfo("download_queued", { sessionId: guard.meta.id, commandId: command.id });
   return jsonResponse({ commandId: command.id, downloadId });
 });
 
@@ -437,7 +438,7 @@ app.get("/api/sessions/:id/downloads/:downloadId", async (c) => {
   const guard = await requireHelper(c.env, c.req.raw, c.req.param("id"), { allowTerminal: true });
   if ("response" in guard) return guard.response;
   const downloadId = cleanString(c.req.param("downloadId"), 200);
-  const object = await c.env.REMOTE_MAILBOX.get(downloadKey(guard.meta.id, downloadId));
+  const object = await c.env.SOE_MAILBOX.get(downloadKey(guard.meta.id, downloadId));
   if (!object) return jsonResponse({ error: "Download not found" }, 404);
   const path = object.customMetadata?.path || "download";
   return new Response(object.body, {
@@ -467,7 +468,7 @@ app.post("/api/agent/:code/hello", async (c) => {
     message: `Agent connected as ${cleanString(payload.user, 120) || "unknown"}`,
     status: meta.status
   });
-  logInfo("agent_connected", { sessionId: meta.id, code: meta.code, platform: cleanString(payload.platform, 120) });
+  logInfo("agent_connected", { sessionId: meta.id, platform: cleanString(payload.platform, 120) });
   return jsonResponse({ ok: true, status: meta.status, expiresAt: meta.expiresAt });
 });
 
@@ -483,8 +484,8 @@ app.get("/api/agent/:code/next", async (c) => {
     message: `Started ${command.type} ${command.id}`,
     commandId: command.id
   });
-  logInfo("command_started", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, commandType: command.type });
-  return commandResponse(c.env, guard.meta.id, running);
+  logInfo("command_started", { sessionId: guard.meta.id, commandId: command.id, commandType: command.type });
+  return commandResponse(c.env, running);
 });
 
 app.post("/api/agent/:code/ack", async (c) => {
@@ -511,7 +512,7 @@ app.post("/api/agent/:code/result/:commandId", async (c) => {
     const bytes = await c.req.raw.arrayBuffer();
     if (bytes.byteLength > maxFileBytes) return jsonResponse({ error: "File exceeds 1 MB" }, 413);
     const downloadId = command.downloadId || randomId();
-    await c.env.REMOTE_MAILBOX.put(downloadKey(guard.meta.id, downloadId), bytes, {
+    await c.env.SOE_MAILBOX.put(downloadKey(guard.meta.id, downloadId), bytes, {
       httpMetadata: { contentType: "application/octet-stream" },
       customMetadata: {
         path: command.path || "download",
@@ -529,7 +530,7 @@ app.post("/api/agent/:code/result/:commandId", async (c) => {
       size: bytes.byteLength,
       exitCode
     });
-    logInfo("download_ready", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, bytes: bytes.byteLength });
+    logInfo("download_ready", { sessionId: guard.meta.id, commandId: command.id, bytes: bytes.byteLength });
     return jsonResponse({ ok: true });
   }
   const output = await readLimitedText(c.req.raw, maxResultBytes);
@@ -546,7 +547,7 @@ app.post("/api/agent/:code/result/:commandId", async (c) => {
       exitCode,
       output: output || undefined
     });
-    logInfo("upload_result", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, exitCode, status });
+    logInfo("upload_result", { sessionId: guard.meta.id, commandId: command.id, exitCode, status });
   } else {
     await appendEvent(c.env, guard.meta.id, {
       type: status === "completed" ? "command_result" : "command_failed",
@@ -555,7 +556,7 @@ app.post("/api/agent/:code/result/:commandId", async (c) => {
       exitCode,
       output
     });
-    logInfo("command_result", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, exitCode, status });
+    logInfo("command_result", { sessionId: guard.meta.id, commandId: command.id, exitCode, status });
   }
   return jsonResponse({ ok: true });
 });
@@ -571,14 +572,14 @@ app.post("/api/agent/:code/bye", async (c) => {
       message: "Agent stopped",
       status: meta.status
     });
-    logInfo("agent_stopped", { sessionId: meta.id, code: meta.code });
+    logInfo("agent_stopped", { sessionId: meta.id });
   }
   return jsonResponse({ ok: true });
 });
 
 app.get("/start/:file", async (c) => {
   const file = c.req.param("file");
-  const token = cleanString(new URL(c.req.url).searchParams.get("token"), 500);
+  const token = cleanString(bearerToken(c.req.raw), 500);
   if (!token) return textResponse("Missing token", 400);
   if (file.endsWith(".sh")) {
     const code = cleanString(file.slice(0, -3), 40);
@@ -669,19 +670,38 @@ async function enqueueCommand(env: Env, sessionId: string, input: Omit<CommandRe
     ...input
   };
   await putJson(env, commandKey(sessionId, command.id), command);
+  const queue = (await getJson<string[]>(env, commandQueueKey(sessionId))) || [];
+  queue.push(command.id);
+  await putJson(env, commandQueueKey(sessionId), queue);
   return command;
 }
 
 async function nextQueuedCommand(env: Env, sessionId: string): Promise<CommandRecord | null> {
-  const commands = await listJsonObjects<CommandRecord>(env, `sessions/${sessionId}/commands/`);
-  commands.sort((a, b) => a.createdAt - b.createdAt);
-  return commands.find((command) => command.status === "queued") || null;
+  let queue = await getJson<string[]>(env, commandQueueKey(sessionId));
+  if (!queue) {
+    const commands = await listJsonObjects<CommandRecord>(env, `sessions/${sessionId}/commands/`);
+    queue = commands
+      .filter((command) => command.status === "queued")
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((command) => command.id);
+  }
+  while (queue.length > 0) {
+    const commandId = queue.shift();
+    if (!commandId) continue;
+    const command = await getJson<CommandRecord>(env, commandKey(sessionId, commandId));
+    if (command?.status === "queued") {
+      await putJson(env, commandQueueKey(sessionId), queue);
+      return command;
+    }
+  }
+  await putJson(env, commandQueueKey(sessionId), queue);
+  return null;
 }
 
-async function commandResponse(env: Env, sessionId: string, command: CommandRecord): Promise<Response> {
+async function commandResponse(env: Env, command: CommandRecord): Promise<Response> {
   const headers = commandHeaders(command);
   if (command.type === "write-file") {
-    const object = command.uploadKey ? await env.REMOTE_MAILBOX.get(command.uploadKey) : null;
+    const object = command.uploadKey ? await env.SOE_MAILBOX.get(command.uploadKey) : null;
     if (!object) return jsonResponse({ error: "Upload not found" }, 404);
     return new Response(object.body, { status: 200, headers });
   }
@@ -689,51 +709,6 @@ async function commandResponse(env: Env, sessionId: string, command: CommandReco
     return new Response("", { status: 200, headers });
   }
   return new Response(command.body || "", { status: 200, headers });
-}
-
-async function enqueueSimpleCommand(env: Env, code: string, body: string, timeoutSeconds: number): Promise<SimpleCommandRecord> {
-  const pending = await getJson<SimpleCommandRecord>(env, simplePendingCommandKey(code));
-  if (pending && Date.now() - pending.createdAt < Math.max(pending.timeoutSeconds * 1000, 60000)) {
-    throw new Error("Another command is already waiting for this agent");
-  }
-  if (pending) await env.REMOTE_MAILBOX.delete(simplePendingCommandKey(code));
-  const command: SimpleCommandRecord = {
-    id: randomId(),
-    status: "queued",
-    body,
-    createdAt: Date.now(),
-    timeoutSeconds
-  };
-  await putJson(env, simpleCommandKey(code, command.id), command);
-  await putJson(env, simplePendingCommandKey(code), command);
-  return command;
-}
-
-async function nextSimpleCommand(env: Env, code: string): Promise<SimpleCommandRecord | null> {
-  const command = await getJson<SimpleCommandRecord>(env, simplePendingCommandKey(code));
-  if (!command) return null;
-  await env.REMOTE_MAILBOX.delete(simplePendingCommandKey(code));
-  return command;
-}
-
-async function waitForSimpleCommand(env: Env, code: string, commandId: string, waitMs: number): Promise<SimpleCommandRecord | null> {
-  const started = Date.now();
-  while (Date.now() - started < waitMs) {
-    const command = await getJson<SimpleCommandRecord>(env, simpleCommandKey(code, commandId));
-    if (command?.completedAt) return command;
-    await sleepMs(250);
-  }
-  return getJson<SimpleCommandRecord>(env, simpleCommandKey(code, commandId));
-}
-
-async function waitForSimpleAgent(env: Env, code: string, waitMs: number): Promise<SimpleAgentState | null> {
-  const started = Date.now();
-  while (Date.now() - started < waitMs) {
-    const state = await getJson<SimpleAgentState>(env, simpleStateKey(code));
-    if (state?.status === "connected") return state;
-    await sleepMs(500);
-  }
-  return getJson<SimpleAgentState>(env, simpleStateKey(code));
 }
 
 function commandHeaders(command: CommandRecord): Headers {
@@ -751,10 +726,6 @@ function commandHeaders(command: CommandRecord): Headers {
   return headers;
 }
 
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function appendEvent(env: Env, sessionId: string, input: Omit<EventRecord, "id" | "ts">): Promise<EventRecord> {
   const event: EventRecord = {
     id: randomId(),
@@ -762,15 +733,28 @@ async function appendEvent(env: Env, sessionId: string, input: Omit<EventRecord,
     ...input
   };
   await putJson(env, eventKey(sessionId, event.id), event);
+  const eventIds = (await getJson<string[]>(env, eventIndexKey(sessionId))) || [];
+  eventIds.push(event.id);
+  await putJson(env, eventIndexKey(sessionId), eventIds.slice(-500));
   return event;
 }
 
 async function listEvents(env: Env, sessionId: string, after: string): Promise<EventRecord[]> {
-  const events = await listJsonObjects<EventRecord>(env, `sessions/${sessionId}/events/`);
+  const eventIds = await getJson<string[]>(env, eventIndexKey(sessionId));
+  const events = eventIds ? await listEventsById(env, sessionId, eventIds) : await listJsonObjects<EventRecord>(env, `sessions/${sessionId}/events/`);
   return events
     .filter((event) => !after || event.id > after)
     .sort((a, b) => a.id.localeCompare(b.id))
     .slice(-100);
+}
+
+async function listEventsById(env: Env, sessionId: string, eventIds: string[]): Promise<EventRecord[]> {
+  const events: EventRecord[] = [];
+  for (const eventId of eventIds) {
+    const event = await getJson<EventRecord>(env, eventKey(sessionId, eventId));
+    if (event) events.push(event);
+  }
+  return events;
 }
 
 async function cleanupExpiredSessions(env: Env): Promise<void> {
@@ -782,7 +766,7 @@ async function cleanupExpiredSessions(env: Env): Promise<void> {
     }
     if (now >= meta.expiresAt + cleanupRetentionMs) {
       await deletePrefix(env, `sessions/${meta.id}/`);
-      await env.REMOTE_MAILBOX.delete(codeKey(meta.code));
+      await env.SOE_MAILBOX.delete(codeKey(meta.code));
     }
   }
 }
@@ -790,9 +774,9 @@ async function cleanupExpiredSessions(env: Env): Promise<void> {
 async function deletePrefix(env: Env, prefix: string): Promise<void> {
   let cursor: string | undefined;
   do {
-    const listed = await env.REMOTE_MAILBOX.list({ prefix, cursor });
+    const listed = await env.SOE_MAILBOX.list({ prefix, cursor });
     for (const object of listed.objects) {
-      await env.REMOTE_MAILBOX.delete(object.key);
+      await env.SOE_MAILBOX.delete(object.key);
     }
     cursor = listed.truncated ? listed.cursor : undefined;
   } while (cursor);
@@ -802,7 +786,7 @@ async function listJsonObjects<T>(env: Env, prefix: string, accept: (key: string
   const items: T[] = [];
   let cursor: string | undefined;
   do {
-    const listed = await env.REMOTE_MAILBOX.list({ prefix, cursor });
+    const listed = await env.SOE_MAILBOX.list({ prefix, cursor });
     for (const object of listed.objects) {
       if (!accept(object.key)) continue;
       const value = await getJson<T>(env, object.key);
@@ -814,27 +798,32 @@ async function listJsonObjects<T>(env: Env, prefix: string, accept: (key: string
 }
 
 async function putJson(env: Env, key: string, value: unknown): Promise<void> {
-  await env.REMOTE_MAILBOX.put(key, JSON.stringify(value), {
+  await env.SOE_MAILBOX.put(key, JSON.stringify(value), {
     httpMetadata: { contentType: "application/json" }
   });
 }
 
 async function getJson<T>(env: Env, key: string): Promise<T | null> {
-  const object = await env.REMOTE_MAILBOX.get(key);
+  const object = await env.SOE_MAILBOX.get(key);
   if (!object) return null;
   return JSON.parse(await object.text()) as T;
 }
 
-async function readJson<T>(request: Request): Promise<T> {
+async function readJson<T>(request: Request, maxBytes = maxCommandBytes): Promise<T> {
   if (!request.headers.get("content-type")?.includes("application/json")) return {} as T;
-  return request.json() as Promise<T>;
+  const bytes = await request.arrayBuffer();
+  if (bytes.byteLength > maxBytes) throw new PayloadTooLargeError(maxBytes);
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+  } catch {
+    throw new BadRequestError("Invalid JSON");
+  }
 }
 
 async function readLimitedText(request: Request, maxBytes: number): Promise<string> {
   const bytes = await request.arrayBuffer();
-  const view = bytes.byteLength > maxBytes ? bytes.slice(0, maxBytes) : bytes;
-  const suffix = bytes.byteLength > maxBytes ? "\n[truncated]" : "";
-  return new TextDecoder().decode(view) + suffix;
+  if (bytes.byteLength > maxBytes) throw new PayloadTooLargeError(maxBytes);
+  return new TextDecoder().decode(bytes);
 }
 
 async function sha256(value: string): Promise<string> {
@@ -910,6 +899,10 @@ function publicBaseUrl(request: Request, env: Env): string {
   return (env.BASE_URL || new URL(request.url).origin).replace(/\/$/, "");
 }
 
+function legacyBridgeEnabled(env: Env): boolean {
+  return env.ENABLE_LEGACY_BRIDGE === "true";
+}
+
 function bridgeStub(env: Env, code: string): DurableObjectStub {
   return env.COMMAND_BRIDGES.get(env.COMMAND_BRIDGES.idFromName(code));
 }
@@ -965,16 +958,20 @@ function logInfo(event: string, fields: Record<string, unknown>): void {
 }
 
 function terminalUsage(baseUrl: string): string {
-  return `Remote Support
+  return `soe
 
-Remote macOS/Linux:
-curl -fsSL ${baseUrl}/connect.sh | sh
+Create a session:
+curl -sS -X POST ${baseUrl}/api/sessions \\
+  -H "Content-Type: application/json" \\
+  --data '{"helperName":"Dirk"}'
 
-Remote Windows:
-irm "${baseUrl}/connect.ps1" | iex
+Run shellCommand or windowsCommand from the response on the remote machine.
 
-Helper:
-curl -sS ${baseUrl} -H "x-api-key: <uuid-from-clipboard>" --data-binary "pwd"
+Queue a command:
+curl -sS -X POST ${baseUrl}/api/sessions/<session-id>/commands \\
+  -H "Authorization: Bearer <helper-token>" \\
+  -H "Content-Type: application/json" \\
+  --data '{"body":"pwd"}'
 `;
 }
 
@@ -990,24 +987,20 @@ function commandKey(sessionId: string, commandId: string): string {
   return `sessions/${sessionId}/commands/${commandId}.json`;
 }
 
+function commandQueueKey(sessionId: string): string {
+  return `sessions/${sessionId}/command-queue.json`;
+}
+
 function eventKey(sessionId: string, eventId: string): string {
   return `sessions/${sessionId}/events/${eventId}.json`;
 }
 
+function eventIndexKey(sessionId: string): string {
+  return `sessions/${sessionId}/event-index.json`;
+}
+
 function downloadKey(sessionId: string, downloadId: string): string {
   return `sessions/${sessionId}/downloads/${downloadId}`;
-}
-
-function simpleStateKey(code: string): string {
-  return `simple/${code}/state.json`;
-}
-
-function simpleCommandKey(code: string, commandId: string): string {
-  return `simple/${code}/commands/${commandId}.json`;
-}
-
-function simplePendingCommandKey(code: string): string {
-  return `simple/${code}/pending-command.json`;
 }
 
 function simpleShellAgentScript(baseUrl: string): string {
@@ -1076,9 +1069,9 @@ run_command() {
     printf '\\n[exit %s]\\n' "$exit_code"
   fi
   if curl -fsS -X POST -H "x-api-key: $CODE" --data-binary "@$result_file" "$BASE_URL/api/v1/$CODE/result/$command_id?exit=$exit_code" >/dev/null; then
-    printf '[remote] result posted: %s\\n' "$command_id"
+    printf '[soe] result posted: %s\\n' "$command_id"
   else
-    printf '[remote] result upload failed: %s\\n' "$command_id"
+    printf '[soe] result upload failed: %s\\n' "$command_id"
   fi
   rm -f "$result_file"
 }
@@ -1095,7 +1088,7 @@ else
   CLIPBOARD='clipboard copy unavailable'
 fi
 
-printf '\\nRemote Support\\n\\nCode: %s (%s)\\n\\nHelper command:\\ncurl -sS %s -H "x-api-key: %s" --data-binary "pwd"\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$CLIPBOARD" "$BASE_URL" "$CODE"
+printf '\\nsoe\\n\\nCode: %s (%s)\\n\\nHelper command:\\ncurl -sS %s -H "x-api-key: %s" --data-binary "pwd"\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$CLIPBOARD" "$BASE_URL" "$CODE"
 trap 'post_bye; exit 0' INT TERM EXIT
 
 while true; do
@@ -1177,7 +1170,7 @@ function Run-Command([string]$CommandId, [string]$Payload) {
   try {
     Send-Result -CommandId $CommandId -ExitCode $ExitCode -ResultFile $ResultFile
   } catch {
-    Write-Host ("[remote] result upload failed " + $CommandId + ": " + $_.Exception.Message)
+    Write-Host ("[soe] result upload failed " + $CommandId + ": " + $_.Exception.Message)
     throw
   }
   Remove-Item $ResultFile -Force
@@ -1187,13 +1180,13 @@ function Send-Result([string]$CommandId, [int]$ExitCode, [string]$ResultFile) {
   $ResultSize = (Get-Item -LiteralPath $ResultFile).Length
   $ResultUrl = $BaseUrl + "/api/v1/" + $Code + "/result/" + $CommandId + "?exit=" + $ExitCode
   if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-    Write-Host ("[remote] posting result with curl.exe: " + $CommandId + " (" + $ResultSize + " bytes)")
+    Write-Host ("[soe] posting result with curl.exe: " + $CommandId + " (" + $ResultSize + " bytes)")
     curl.exe -fsS -X POST -H "x-api-key: $Code" --data-binary "@$ResultFile" "$ResultUrl" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "curl.exe exited $LASTEXITCODE" }
-    Write-Host ("[remote] result posted: " + $CommandId)
+    Write-Host ("[soe] result posted: " + $CommandId)
     return
   }
-  Write-Host ("[remote] posting result with WebRequest: " + $CommandId + " (" + $ResultSize + " bytes)")
+  Write-Host ("[soe] posting result with WebRequest: " + $CommandId + " (" + $ResultSize + " bytes)")
   $Bytes = [IO.File]::ReadAllBytes($ResultFile)
   $Request = [System.Net.WebRequest]::Create($ResultUrl)
   $Request.Method = "POST"
@@ -1205,20 +1198,20 @@ function Send-Result([string]$CommandId, [int]$ExitCode, [string]$ResultFile) {
   $Stream.Close()
   $Response = $Request.GetResponse()
   $Response.Close()
-  Write-Host ("[remote] result posted: " + $CommandId)
+  Write-Host ("[soe] result posted: " + $CommandId)
 }
 
 function Open-EventStream {
-  Write-Host "[remote] connecting event stream"
+  Write-Host "[soe] connecting event stream"
   $Response = $Client.GetAsync("$BaseUrl/api/v1/$Code/events", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
   $Response.EnsureSuccessStatusCode() | Out-Null
-  Write-Host "[remote] event stream connected"
+  Write-Host "[soe] event stream connected"
   $Stream = $Response.Content.ReadAsStreamAsync().Result
   return New-Object System.IO.StreamReader -ArgumentList $Stream
 }
 
 Write-Host ""
-Write-Host "Remote Support"
+Write-Host "soe"
 Write-Host ""
 Write-Host "Code: $Code ($Clipboard)"
 Write-Host ""
@@ -1244,7 +1237,7 @@ try {
           $EventData = $Line.Substring(6)
         } elseif ($Line -eq "") {
           if ($EventType -eq "command" -and $EventId -and $EventData) {
-            Write-Host ("[remote] command received: " + $EventId)
+            Write-Host ("[soe] command received: " + $EventId)
             Run-Command -CommandId $EventId -Payload $EventData
           }
           $EventType = ""
@@ -1253,7 +1246,7 @@ try {
         }
       }
     } catch {
-      Write-Host ("[remote] stream error: " + $_.Exception.Message)
+      Write-Host ("[soe] stream error: " + $_.Exception.Message)
       Start-Sleep -Seconds 1
     }
   }
@@ -1340,7 +1333,7 @@ read_file() {
   cp "$target_path" "$output_file"
 }
 
-printf '\\nBuddy Dev Support\\n\\nSession: %s\\nHelper: %s\\nAccess: command runner + file transfer\\nExpires: %s\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$HELPER" "$EXPIRES"
+printf '\\nsoe\\n\\nSession: %s\\nHelper: %s\\nAccess: command runner + file transfer\\nExpires: %s\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$HELPER" "$EXPIRES"
 trap 'post_bye; exit 0' INT TERM EXIT
 curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data "{\"platform\":\"$(uname -s)\",\"user\":\"$(whoami)\",\"cwd\":\"$(pwd | sed 's/"/\\\\"/g')\"}" "$BASE_URL/api/agent/$CODE/hello" >/dev/null
 
@@ -1472,7 +1465,7 @@ function Read-RemoteFile([string]$TargetPath, [string]$ResultFile) {
 }
 
 Write-Host ""
-Write-Host "Buddy Dev Support"
+Write-Host "soe"
 Write-Host ""
 Write-Host "Session: $Code"
 Write-Host "Helper: $Helper"
@@ -1534,5 +1527,8 @@ function quotePowerShell(value: string): string {
 }
 
 export default {
-  fetch: app.fetch
+  fetch: app.fetch,
+  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await cleanupExpiredSessions(env);
+  }
 } satisfies ExportedHandler<Env>;
