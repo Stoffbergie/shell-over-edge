@@ -112,4 +112,12 @@ const authed = await request(`/api/sessions/${payload.id}`, {
 });
 assert(authed.response.ok, `authorized session read returned ${authed.response.status}: ${authed.text}`);
 
+const ended = await request(`/api/sessions/${payload.id}/end`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${payload.helperToken}` }
+});
+assert(ended.response.ok, `session end returned ${ended.response.status}: ${ended.text}`);
+const endedPayload = JSON.parse(ended.text);
+assert(endedPayload.ok === true && endedPayload.status === "ended", "session end payload is wrong");
+
 console.log(`production smoke passed for ${baseUrl}`);
