@@ -31,6 +31,7 @@ mode = "smart"
 [assets]
 directory = "./public"
 binding = "ASSETS"
+run_worker_first = ["/"]
 
 [[r2_buckets]]
 binding = "REMOTE_MAILBOX"

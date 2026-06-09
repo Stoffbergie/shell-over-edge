@@ -106,6 +106,13 @@ label span,
   padding: clamp(28px, 5vw, 64px);
 }
 
+.intro.compact {
+  min-height: auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 18px;
+  padding: 24px;
+}
+
 .intro h1,
 .topbar h1 {
   margin: 0;
@@ -285,6 +292,11 @@ label span,
     min-height: calc(100vh - 20px);
     grid-template-columns: 1fr;
     align-content: center;
+  }
+
+  .intro.compact {
+    min-height: auto;
+    grid-template-columns: 1fr;
   }
 
   .topbar {

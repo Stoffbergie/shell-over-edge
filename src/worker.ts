@@ -63,6 +63,28 @@ type EventRecord = {
   size?: number;
 };
 
+type SimpleAgentState = {
+  code: string;
+  status: "connected" | "stopped";
+  connectedAt: number;
+  seenAt: number;
+  platform?: string;
+  user?: string;
+  cwd?: string;
+};
+
+type SimpleCommandRecord = {
+  id: string;
+  status: CommandStatus;
+  body: string;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  timeoutSeconds: number;
+  exitCode?: number;
+  output?: string;
+};
+
 type HelperGuard = { meta: SessionMeta } | { response: Response };
 type AgentGuard = { meta: SessionMeta } | { response: Response };
 
@@ -71,11 +93,117 @@ const sessionTtlMs = 2 * 60 * 60 * 1000;
 const cleanupRetentionMs = 24 * 60 * 60 * 1000;
 const maxFileBytes = 1024 * 1024;
 const maxResultBytes = 1024 * 1024;
+const maxCommandBytes = 64 * 1024;
 const textEncoder = new TextEncoder();
 
 app.use("*", async (c, next) => {
   await next();
-  c.res.headers.set("Cache-Control", "no-store");
+  const headers = new Headers(c.res.headers);
+  headers.set("Cache-Control", "no-store");
+  c.res = new Response(c.res.body, {
+    status: c.res.status,
+    statusText: c.res.statusText,
+    headers
+  });
+});
+
+app.post("/", async (c) => {
+  const code = apiKey(c.req.raw);
+  if (!code) return textResponse("Missing or invalid x-api-key UUID", 401);
+  const state = await waitForSimpleAgent(c.env, code, 10000);
+  if (!state || state.status !== "connected") return textResponse("No agent connected for that key", 404);
+  const body = (await readLimitedText(c.req.raw, maxCommandBytes)).trim();
+  if (!body) return textResponse("Command body is required", 400);
+  const command = await enqueueSimpleCommand(c.env, code, body, normalizeTimeout(c.req.header("x-timeout-seconds") || 30));
+  logInfo("v1_command_queued", { code, commandId: command.id });
+  const result = await waitForSimpleCommand(c.env, code, command.id, Math.min(command.timeoutSeconds * 1000 + 8000, 55000));
+  if (!result?.completedAt) {
+    return textResponse(`Command queued as ${command.id}, but no result arrived before the HTTP wait timeout.\n`, 504);
+  }
+  return new Response(result.output || "", {
+    status: 200,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Command-Id": result.id,
+      "X-Exit-Code": String(result.exitCode ?? 0)
+    }
+  });
+});
+
+app.get("/connect.sh", (c) => textResponse(simpleShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/x-shellscript"));
+app.get("/connect.ps1", (c) => textResponse(simplePowerShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/plain; charset=utf-8"));
+
+app.post("/api/v1/:code/hello", async (c) => {
+  const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
+  if ("response" in guard) return guard.response;
+  const payload = await readJson<{ platform?: string; user?: string; cwd?: string }>(c.req.raw).catch((): { platform?: string; user?: string; cwd?: string } => ({}));
+  const now = Date.now();
+  const state: SimpleAgentState = {
+    code: guard.code,
+    status: "connected",
+    connectedAt: now,
+    seenAt: now,
+    platform: cleanString(payload.platform, 120),
+    user: cleanString(payload.user, 120),
+    cwd: cleanString(payload.cwd, 500)
+  };
+  await putJson(c.env, simpleStateKey(guard.code), state);
+  logInfo("v1_agent_connected", { code: guard.code, platform: state.platform });
+  return jsonResponse({ ok: true });
+});
+
+app.get("/api/v1/:code/next", async (c) => {
+  const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
+  if ("response" in guard) return guard.response;
+  const state = await getJson<SimpleAgentState>(c.env, simpleStateKey(guard.code));
+  if (!state || state.status !== "connected") return jsonResponse({ error: "Agent not registered" }, 404);
+  await putJson(c.env, simpleStateKey(guard.code), { ...state, seenAt: Date.now() });
+  const command = await nextSimpleCommand(c.env, guard.code);
+  if (!command) return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+  const running = { ...command, status: "running" as const, startedAt: Date.now() };
+  await putJson(c.env, simpleCommandKey(guard.code, command.id), running);
+  logInfo("v1_command_started", { code: guard.code, commandId: command.id });
+  return new Response(command.body, {
+    status: 200,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Command-Id": command.id,
+      "X-Command-Timeout": String(command.timeoutSeconds)
+    }
+  });
+});
+
+app.post("/api/v1/:code/result/:commandId", async (c) => {
+  const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
+  if ("response" in guard) return guard.response;
+  const commandId = cleanString(c.req.param("commandId"), 200);
+  const command = await getJson<SimpleCommandRecord>(c.env, simpleCommandKey(guard.code, commandId));
+  if (!command) return jsonResponse({ error: "Command not found" }, 404);
+  const exitCode = Number(new URL(c.req.url).searchParams.get("exit") || "0");
+  const output = await readLimitedText(c.req.raw, maxResultBytes);
+  const done = {
+    ...command,
+    status: exitCode === 0 ? "completed" as const : "failed" as const,
+    completedAt: Date.now(),
+    exitCode,
+    output
+  };
+  await putJson(c.env, simpleCommandKey(guard.code, command.id), done);
+  logInfo("v1_command_result", { code: guard.code, commandId: command.id, exitCode, status: done.status });
+  return jsonResponse({ ok: true });
+});
+
+app.post("/api/v1/:code/bye", async (c) => {
+  const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
+  if ("response" in guard) return guard.response;
+  const state = await getJson<SimpleAgentState>(c.env, simpleStateKey(guard.code));
+  if (state) {
+    await putJson(c.env, simpleStateKey(guard.code), { ...state, status: "stopped" as const, seenAt: Date.now() });
+  }
+  logInfo("v1_agent_stopped", { code: guard.code });
+  return jsonResponse({ ok: true });
 });
 
 app.post("/api/sessions", async (c) => {
@@ -500,6 +628,44 @@ async function commandResponse(env: Env, sessionId: string, command: CommandReco
   return new Response(command.body || "", { status: 200, headers });
 }
 
+async function enqueueSimpleCommand(env: Env, code: string, body: string, timeoutSeconds: number): Promise<SimpleCommandRecord> {
+  const command: SimpleCommandRecord = {
+    id: randomId(),
+    status: "queued",
+    body,
+    createdAt: Date.now(),
+    timeoutSeconds
+  };
+  await putJson(env, simpleCommandKey(code, command.id), command);
+  return command;
+}
+
+async function nextSimpleCommand(env: Env, code: string): Promise<SimpleCommandRecord | null> {
+  const commands = await listJsonObjects<SimpleCommandRecord>(env, `simple/${code}/commands/`);
+  commands.sort((a, b) => a.createdAt - b.createdAt);
+  return commands.find((command) => command.status === "queued") || null;
+}
+
+async function waitForSimpleCommand(env: Env, code: string, commandId: string, waitMs: number): Promise<SimpleCommandRecord | null> {
+  const started = Date.now();
+  while (Date.now() - started < waitMs) {
+    const command = await getJson<SimpleCommandRecord>(env, simpleCommandKey(code, commandId));
+    if (command?.completedAt) return command;
+    await sleepMs(750);
+  }
+  return getJson<SimpleCommandRecord>(env, simpleCommandKey(code, commandId));
+}
+
+async function waitForSimpleAgent(env: Env, code: string, waitMs: number): Promise<SimpleAgentState | null> {
+  const started = Date.now();
+  while (Date.now() - started < waitMs) {
+    const state = await getJson<SimpleAgentState>(env, simpleStateKey(code));
+    if (state?.status === "connected") return state;
+    await sleepMs(500);
+  }
+  return getJson<SimpleAgentState>(env, simpleStateKey(code));
+}
+
 function commandHeaders(command: CommandRecord): Headers {
   const headers = new Headers({
     "Cache-Control": "no-store",
@@ -513,6 +679,10 @@ function commandHeaders(command: CommandRecord): Headers {
   if (command.uploadName) headers.set("X-Command-Upload-Name-Base64", base64Encode(command.uploadName));
   if (command.downloadId) headers.set("X-Download-Id", command.downloadId);
   return headers;
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function appendEvent(env: Env, sessionId: string, input: Omit<EventRecord, "id" | "ts">): Promise<EventRecord> {
@@ -615,6 +785,24 @@ function bearerToken(request: Request): string {
   const header = request.headers.get("authorization") || "";
   const match = /^Bearer\s+(.+)$/i.exec(header);
   return match ? match[1] : "";
+}
+
+function apiKey(request: Request): string {
+  const value = (request.headers.get("x-api-key") || "").trim().toLowerCase();
+  return isUuid(value) ? value : "";
+}
+
+function requireSimpleCode(request: Request, codeParam: string): { code: string } | { response: Response } {
+  const code = cleanString(codeParam, 80).toLowerCase();
+  const key = apiKey(request);
+  if (!code || !key || code !== key || !isUuid(code)) {
+    return { response: jsonResponse({ error: "Unauthorized" }, 401) };
+  }
+  return { code };
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 }
 
 function jsonResponse(value: unknown, status = 200): Response {
@@ -720,6 +908,215 @@ function eventKey(sessionId: string, eventId: string): string {
 
 function downloadKey(sessionId: string, downloadId: string): string {
   return `sessions/${sessionId}/downloads/${downloadId}`;
+}
+
+function simpleStateKey(code: string): string {
+  return `simple/${code}/state.json`;
+}
+
+function simpleCommandKey(code: string, commandId: string): string {
+  return `simple/${code}/commands/${commandId}.json`;
+}
+
+function simpleShellAgentScript(baseUrl: string): string {
+  return `#!/bin/sh
+set -u
+BASE_URL=${quoteShell(baseUrl)}
+POLL_SECONDS=1
+
+new_uuid() {
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  elif [ -r /proc/sys/kernel/random/uuid ]; then
+    cat /proc/sys/kernel/random/uuid
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import uuid; print(uuid.uuid4())'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 16 | awk '{ printf "%s-%s-4%s-8%s-%s\\n", substr($0,1,8), substr($0,9,4), substr($0,14,3), substr($0,17,3), substr($0,21,12) }'
+  else
+    printf ''
+  fi
+}
+
+copy_text() {
+  if command -v pbcopy >/dev/null 2>&1; then
+    printf '%s' "$1" | pbcopy
+  elif command -v wl-copy >/dev/null 2>&1; then
+    printf '%s' "$1" | wl-copy
+  elif command -v xclip >/dev/null 2>&1; then
+    printf '%s' "$1" | xclip -selection clipboard
+  elif command -v xsel >/dev/null 2>&1; then
+    printf '%s' "$1" | xsel --clipboard --input
+  elif command -v clip.exe >/dev/null 2>&1; then
+    printf '%s' "$1" | clip.exe
+  else
+    return 1
+  fi
+}
+
+header_value() {
+  awk -F': ' -v name="$1" 'tolower($1) == tolower(name) { sub("\\r$", "", $2); print $2; exit }' "$2"
+}
+
+post_bye() {
+  curl -fsS -X POST -H "x-api-key: $CODE" "$BASE_URL/api/v1/$CODE/bye" >/dev/null 2>&1 || true
+}
+
+CODE=$(new_uuid)
+if [ -z "$CODE" ]; then
+  printf 'Could not generate a UUID on this machine.\\n'
+  exit 1
+fi
+
+if copy_text "$CODE"; then
+  CLIPBOARD='copied to clipboard'
+else
+  CLIPBOARD='clipboard copy unavailable'
+fi
+
+printf '\\nRemote Support\\n\\nCode: %s (%s)\\n\\nHelper command:\\ncurl -sS %s -H "x-api-key: %s" --data-binary "pwd"\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$CLIPBOARD" "$BASE_URL" "$CODE"
+trap 'post_bye; exit 0' INT TERM EXIT
+curl -fsS -X POST -H "x-api-key: $CODE" "$BASE_URL/api/v1/$CODE/hello" >/dev/null
+
+while true; do
+  headers_file=$(mktemp)
+  body_file=$(mktemp)
+  status_code=$(curl -sS -D "$headers_file" -o "$body_file" -w "%{http_code}" -H "x-api-key: $CODE" "$BASE_URL/api/v1/$CODE/next" || printf '000')
+  if [ "$status_code" = "204" ]; then
+    rm -f "$headers_file" "$body_file"
+    sleep "$POLL_SECONDS"
+    continue
+  fi
+  if [ "$status_code" = "410" ] || [ "$status_code" = "404" ] || [ "$status_code" = "401" ]; then
+    cat "$body_file"
+    printf '\\n'
+    rm -f "$headers_file" "$body_file"
+    exit 0
+  fi
+  if [ "$status_code" != "200" ]; then
+    cat "$body_file"
+    printf '\\n'
+    rm -f "$headers_file" "$body_file"
+    sleep "$POLL_SECONDS"
+    continue
+  fi
+  command_id=$(header_value X-Command-Id "$headers_file")
+  timeout_seconds=$(header_value X-Command-Timeout "$headers_file")
+  [ -n "$timeout_seconds" ] || timeout_seconds=30
+  command_body=$(cat "$body_file")
+  result_file=$(mktemp)
+  printf '\\n$ %s\\n' "$command_body"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_seconds" sh -c "$command_body" > "$result_file" 2>&1
+  else
+    sh -c "$command_body" > "$result_file" 2>&1
+  fi
+  exit_code=$?
+  cat "$result_file"
+  printf '\\n[exit %s]\\n' "$exit_code"
+  curl -fsS -X POST -H "x-api-key: $CODE" --data-binary "@$result_file" "$BASE_URL/api/v1/$CODE/result/$command_id?exit=$exit_code" >/dev/null || true
+  rm -f "$headers_file" "$body_file" "$result_file"
+done
+`;
+}
+
+function simplePowerShellAgentScript(baseUrl: string): string {
+  return `$ErrorActionPreference = "Stop"
+$BaseUrl = ${quotePowerShell(baseUrl)}
+$Code = [guid]::NewGuid().ToString()
+$Headers = @{ "x-api-key" = $Code }
+$Clipboard = "copied to clipboard"
+
+try {
+  Set-Clipboard -Value $Code
+} catch {
+  $Clipboard = "clipboard copy unavailable"
+}
+
+function Invoke-AgentRequest {
+  param([string]$Method, [string]$Path, [string]$OutFile, [object]$Body, [string]$ContentType)
+  $Parameters = @{
+    Uri = "$BaseUrl$Path"
+    Method = $Method
+    Headers = $Headers
+    UseBasicParsing = $true
+  }
+  if ($OutFile) { $Parameters.OutFile = $OutFile }
+  if ($null -ne $Body) { $Parameters.Body = $Body }
+  if ($ContentType) { $Parameters.ContentType = $ContentType }
+  try {
+    return Invoke-WebRequest @Parameters
+  } catch {
+    if ($_.Exception.Response) { return $_.Exception.Response }
+    throw
+  }
+}
+
+function Send-Bye {
+  try { Invoke-AgentRequest -Method Post -Path "/api/v1/$Code/bye" | Out-Null } catch {}
+}
+
+function Run-Command([string]$CommandBody, [string]$ResultFile) {
+  try {
+    $global:LASTEXITCODE = 0
+    $Output = & ([scriptblock]::Create($CommandBody)) *>&1 | Out-String
+    $ExitCode = if ($null -ne $global:LASTEXITCODE) { [int]$global:LASTEXITCODE } else { 0 }
+    [IO.File]::WriteAllText($ResultFile, $Output)
+    return $ExitCode
+  } catch {
+    [IO.File]::WriteAllText($ResultFile, $_.Exception.Message)
+    return 1
+  }
+}
+
+Write-Host ""
+Write-Host "Remote Support"
+Write-Host ""
+Write-Host "Code: $Code ($Clipboard)"
+Write-Host ""
+Write-Host "Helper command:"
+Write-Host "curl.exe -sS $BaseUrl -H ""x-api-key: $Code"" --data-binary ""pwd"""
+Write-Host ""
+Write-Host "Stop anytime: Ctrl+C"
+Write-Host ""
+
+try {
+  Invoke-AgentRequest -Method Post -Path "/api/v1/$Code/hello" | Out-Null
+  while ($true) {
+    $BodyFile = [IO.Path]::GetTempFileName()
+    $ResultFile = [IO.Path]::GetTempFileName()
+    $Response = Invoke-AgentRequest -Method Get -Path "/api/v1/$Code/next" -OutFile $BodyFile
+    $StatusCode = [int]$Response.StatusCode
+    if ($StatusCode -eq 204) {
+      Remove-Item $BodyFile, $ResultFile -Force
+      Start-Sleep -Seconds 1
+      continue
+    }
+    if ($StatusCode -eq 410 -or $StatusCode -eq 401 -or $StatusCode -eq 404) {
+      if (Test-Path $BodyFile) { Get-Content $BodyFile -Raw | Write-Host }
+      Remove-Item $BodyFile, $ResultFile -Force
+      break
+    }
+    if ($StatusCode -ne 200) {
+      if (Test-Path $BodyFile) { Get-Content $BodyFile -Raw | Write-Host }
+      Remove-Item $BodyFile, $ResultFile -Force
+      Start-Sleep -Seconds 1
+      continue
+    }
+    $CommandId = [string]$Response.Headers["X-Command-Id"]
+    $CommandBody = Get-Content $BodyFile -Raw
+    Write-Host ""
+    Write-Host "> $CommandBody"
+    $ExitCode = Run-Command -CommandBody $CommandBody -ResultFile $ResultFile
+    if (Test-Path $ResultFile) { Get-Content $ResultFile -Raw | Write-Host }
+    Write-Host "[exit $ExitCode]"
+    Invoke-AgentRequest -Method Post -Path "/api/v1/$Code/result/$CommandId?exit=$ExitCode" -Body ([IO.File]::ReadAllBytes($ResultFile)) -ContentType "application/octet-stream" | Out-Null
+    Remove-Item $BodyFile, $ResultFile -Force
+  }
+} finally {
+  Send-Bye
+}
+`;
 }
 
 function shellAgentScript(baseUrl: string, meta: SessionMeta, token: string): string {

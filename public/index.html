@@ -8,104 +8,40 @@
   </head>
   <body>
     <main class="shell">
-      <section class="intro" id="create-panel">
+      <section class="intro compact">
         <div>
           <p class="eyebrow">remote.stoff.dev</p>
-          <h1>Buddy Dev Support</h1>
+          <h1>Remote Support</h1>
         </div>
-        <form id="create-form" class="create-form">
-          <label>
-            <span>Helper</span>
-            <input id="helper-name" name="helperName" value="Dirk" autocomplete="name">
-          </label>
-          <button type="submit">Create session</button>
-        </form>
+        <div class="status-stack">
+          <span class="status">API v1</span>
+        </div>
       </section>
 
-      <section class="workspace hidden" id="session-panel">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">Session</p>
-            <h1 id="session-code">Waiting</h1>
-          </div>
-          <div class="status-stack">
-            <span class="status" id="session-status">waiting</span>
-            <button id="end-session" class="danger" type="button">End</button>
-          </div>
-        </header>
-
+      <section class="workspace">
         <section class="install-grid">
           <article class="panel">
             <div class="panel-heading">
               <h2>macOS / Linux</h2>
-              <button type="button" data-copy-target="shell-command">Copy</button>
+              <button type="button" data-copy-target="shell-connect">Copy</button>
             </div>
-            <pre id="shell-command" class="command-block"></pre>
+            <pre id="shell-connect" class="command-block"></pre>
           </article>
           <article class="panel">
             <div class="panel-heading">
               <h2>Windows</h2>
-              <button type="button" data-copy-target="windows-command">Copy</button>
+              <button type="button" data-copy-target="windows-connect">Copy</button>
             </div>
-            <pre id="windows-command" class="command-block"></pre>
-          </article>
-        </section>
-
-        <section class="control-grid">
-          <article class="panel">
-            <div class="panel-heading">
-              <h2>Command</h2>
-              <span id="command-state" class="muted"></span>
-            </div>
-            <form id="command-form" class="stack">
-              <label>
-                <span>Working directory</span>
-                <input id="command-cwd" name="cwd" placeholder="/Users/dirk/project">
-              </label>
-              <label>
-                <span>Timeout seconds</span>
-                <input id="command-timeout" name="timeoutSeconds" type="number" min="1" max="3600" value="900">
-              </label>
-              <label>
-                <span>Command</span>
-                <textarea id="command-body" name="body" rows="7" spellcheck="false">whoami</textarea>
-              </label>
-              <button type="submit">Run</button>
-            </form>
-          </article>
-
-          <article class="panel">
-            <div class="panel-heading">
-              <h2>Files</h2>
-              <span id="file-state" class="muted"></span>
-            </div>
-            <form id="upload-form" class="stack">
-              <label>
-                <span>Write path</span>
-                <input id="upload-path" name="path" placeholder="/tmp/.env.local">
-              </label>
-              <label>
-                <span>Upload</span>
-                <input id="upload-file" name="file" type="file">
-              </label>
-              <button type="submit">Write file</button>
-            </form>
-            <form id="download-form" class="stack split-line">
-              <label>
-                <span>Read path</span>
-                <input id="download-path" name="path" placeholder="/tmp/package.json">
-              </label>
-              <button type="submit">Read file</button>
-            </form>
+            <pre id="windows-connect" class="command-block"></pre>
           </article>
         </section>
 
         <section class="panel output-panel">
           <div class="panel-heading">
-            <h2>Output</h2>
-            <button id="clear-output" type="button">Clear</button>
+            <h2>Run command</h2>
+            <button type="button" data-copy-target="helper-command">Copy</button>
           </div>
-          <div id="output" class="output"></div>
+          <pre id="helper-command" class="command-block"></pre>
         </section>
       </section>
     </main>
