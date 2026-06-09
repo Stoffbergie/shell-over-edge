@@ -104,6 +104,7 @@ app.post("/api/sessions", async (c) => {
     message: `Session ${code} created for ${helperName}`,
     status: meta.status
   });
+  logInfo("session_created", { sessionId: id, code, expiresAt: meta.expiresAt });
   const baseUrl = publicBaseUrl(c.req.raw, c.env);
   return jsonResponse({
     id,
@@ -141,6 +142,7 @@ app.post("/api/sessions/:id/commands", async (c) => {
     message: `Queued command ${command.id}`,
     commandId: command.id
   });
+  logInfo("command_queued", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, commandType: command.type });
   return jsonResponse({ commandId: command.id });
 });
 
@@ -167,6 +169,7 @@ app.post("/api/sessions/:id/end", async (c) => {
     message: `Session ${meta.code} ended`,
     status: meta.status
   });
+  logInfo("session_ended", { sessionId: meta.id, code: meta.code });
   return jsonResponse({ ok: true, status: meta.status });
 });
 
@@ -205,6 +208,7 @@ app.post("/api/sessions/:id/upload", async (c) => {
     path,
     size: bytes.byteLength
   });
+  logInfo("upload_queued", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, bytes: bytes.byteLength });
   return jsonResponse({ commandId: command.id, uploadId });
 });
 
@@ -227,6 +231,7 @@ app.post("/api/sessions/:id/download", async (c) => {
     commandId: command.id,
     path
   });
+  logInfo("download_queued", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id });
   return jsonResponse({ commandId: command.id, downloadId });
 });
 
@@ -264,6 +269,7 @@ app.post("/api/agent/:code/hello", async (c) => {
     message: `Agent connected as ${cleanString(payload.user, 120) || "unknown"}`,
     status: meta.status
   });
+  logInfo("agent_connected", { sessionId: meta.id, code: meta.code, platform: cleanString(payload.platform, 120) });
   return jsonResponse({ ok: true, status: meta.status, expiresAt: meta.expiresAt });
 });
 
@@ -279,6 +285,7 @@ app.get("/api/agent/:code/next", async (c) => {
     message: `Started ${command.type} ${command.id}`,
     commandId: command.id
   });
+  logInfo("command_started", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, commandType: command.type });
   return commandResponse(c.env, guard.meta.id, running);
 });
 
@@ -324,6 +331,7 @@ app.post("/api/agent/:code/result/:commandId", async (c) => {
       size: bytes.byteLength,
       exitCode
     });
+    logInfo("download_ready", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, bytes: bytes.byteLength });
     return jsonResponse({ ok: true });
   }
   const output = await readLimitedText(c.req.raw, maxResultBytes);
@@ -340,6 +348,7 @@ app.post("/api/agent/:code/result/:commandId", async (c) => {
       exitCode,
       output: output || undefined
     });
+    logInfo("upload_result", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, exitCode, status });
   } else {
     await appendEvent(c.env, guard.meta.id, {
       type: status === "completed" ? "command_result" : "command_failed",
@@ -348,6 +357,7 @@ app.post("/api/agent/:code/result/:commandId", async (c) => {
       exitCode,
       output
     });
+    logInfo("command_result", { sessionId: guard.meta.id, code: guard.meta.code, commandId: command.id, exitCode, status });
   }
   return jsonResponse({ ok: true });
 });
@@ -363,6 +373,7 @@ app.post("/api/agent/:code/bye", async (c) => {
       message: "Agent stopped",
       status: meta.status
     });
+    logInfo("agent_stopped", { sessionId: meta.id, code: meta.code });
   }
   return jsonResponse({ ok: true });
 });
@@ -685,6 +696,10 @@ function quoteShell(value: string): string {
 
 function safeFileName(path: string): string {
   return (path.split(/[\\/]/).pop() || "download").replace(/["\r\n]/g, "_");
+}
+
+function logInfo(event: string, fields: Record<string, unknown>): void {
+  console.info(JSON.stringify({ event, ...fields, ts: new Date().toISOString() }));
 }
 
 function metaKey(id: string): string {
