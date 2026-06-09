@@ -81,6 +81,7 @@ const maxFileBytes = 1024 * 1024;
 const maxResultBytes = 1024 * 1024;
 const maxCommandBytes = 64 * 1024;
 const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
 
 class PayloadTooLargeError extends Error {
   constructor(readonly maxBytes: number) {
@@ -223,6 +224,7 @@ app.onError((error) => {
 
 app.use("*", async (c, next) => {
   await next();
+  if (c.res.headers.get("Cache-Control") === "no-store") return;
   const headers = new Headers(c.res.headers);
   headers.set("Cache-Control", "no-store");
   c.res = new Response(c.res.body, {
@@ -278,7 +280,9 @@ app.post("/api/v1/:code/bye", async (c) => {
 });
 
 app.post("/api/sessions", async (c) => {
-  await cleanupExpiredSessions(c.env);
+  c.executionCtx.waitUntil(cleanupExpiredSessions(c.env).catch((error) => {
+    logInfo("cleanup_failed", { error: error instanceof Error ? error.message : String(error) });
+  }));
   const payload = await readJson<{ helperName?: string }>(c.req.raw);
   const helperName = cleanString(payload.helperName, 80) || "Dirk";
   const helperToken = randomToken();
@@ -741,7 +745,11 @@ async function appendEvent(env: Env, sessionId: string, input: Omit<EventRecord,
 
 async function listEvents(env: Env, sessionId: string, after: string): Promise<EventRecord[]> {
   const eventIds = await getJson<string[]>(env, eventIndexKey(sessionId));
-  const events = eventIds ? await listEventsById(env, sessionId, eventIds) : await listJsonObjects<EventRecord>(env, `sessions/${sessionId}/events/`);
+  const ids = eventIds
+    ?.filter((eventId) => !after || eventId > after)
+    .sort((a, b) => a.localeCompare(b))
+    .slice(-100);
+  const events = ids ? await listEventsById(env, sessionId, ids) : await listJsonObjects<EventRecord>(env, `sessions/${sessionId}/events/`);
   return events
     .filter((event) => !after || event.id > after)
     .sort((a, b) => a.id.localeCompare(b.id))
@@ -749,12 +757,8 @@ async function listEvents(env: Env, sessionId: string, after: string): Promise<E
 }
 
 async function listEventsById(env: Env, sessionId: string, eventIds: string[]): Promise<EventRecord[]> {
-  const events: EventRecord[] = [];
-  for (const eventId of eventIds) {
-    const event = await getJson<EventRecord>(env, eventKey(sessionId, eventId));
-    if (event) events.push(event);
-  }
-  return events;
+  const events = await Promise.all(eventIds.map((eventId) => getJson<EventRecord>(env, eventKey(sessionId, eventId))));
+  return events.filter((event): event is EventRecord => Boolean(event));
 }
 
 async function cleanupExpiredSessions(env: Env): Promise<void> {
@@ -775,9 +779,8 @@ async function deletePrefix(env: Env, prefix: string): Promise<void> {
   let cursor: string | undefined;
   do {
     const listed = await env.SOE_MAILBOX.list({ prefix, cursor });
-    for (const object of listed.objects) {
-      await env.SOE_MAILBOX.delete(object.key);
-    }
+    const keys = listed.objects.map((object) => object.key);
+    if (keys.length > 0) await env.SOE_MAILBOX.delete(keys);
     cursor = listed.truncated ? listed.cursor : undefined;
   } while (cursor);
 }
@@ -814,7 +817,7 @@ async function readJson<T>(request: Request, maxBytes = maxCommandBytes): Promis
   const bytes = await request.arrayBuffer();
   if (bytes.byteLength > maxBytes) throw new PayloadTooLargeError(maxBytes);
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+    return JSON.parse(textDecoder.decode(bytes)) as T;
   } catch {
     throw new BadRequestError("Invalid JSON");
   }
@@ -823,7 +826,7 @@ async function readJson<T>(request: Request, maxBytes = maxCommandBytes): Promis
 async function readLimitedText(request: Request, maxBytes: number): Promise<string> {
   const bytes = await request.arrayBuffer();
   if (bytes.byteLength > maxBytes) throw new PayloadTooLargeError(maxBytes);
-  return new TextDecoder().decode(bytes);
+  return textDecoder.decode(bytes);
 }
 
 async function sha256(value: string): Promise<string> {
