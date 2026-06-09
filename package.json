@@ -1,0 +1,31 @@
+{
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.5.2",
+      "onFail": "download"
+    }
+  },
+  "type": "module",
+  "name": "remote-stoff-dev",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm run buildclient && wrangler dev --ip 0.0.0.0 --port 8787",
+    "build": "pnpm run buildclient && pnpm run typecheck",
+    "typecheck": "tsc --noEmit",
+    "deploy": "pnpm run build && wrangler deploy",
+    "check": "pnpm run build",
+    "buildclient": "esbuild src/client/main.ts --bundle --format=esm --target=es2022 --outfile=public/app.js"
+  },
+  "packageManager": "pnpm@11.5.2",
+  "dependencies": {
+    "hono": "^4.12.24"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260608.1",
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.98.0"
+  }
+}

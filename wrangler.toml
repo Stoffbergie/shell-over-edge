@@ -1,0 +1,15 @@
+name = "remote-stoff-dev"
+main = "src/worker.ts"
+compatibility_date = "2026-06-09"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[r2_buckets]]
+binding = "REMOTE_MAILBOX"
+bucket_name = "remote-stoff-dev"
+preview_bucket_name = "remote-stoff-dev-preview"
+
+[triggers]
+crons = ["*/30 * * * *"]
