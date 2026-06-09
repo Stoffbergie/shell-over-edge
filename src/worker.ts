@@ -1396,8 +1396,5 @@ function quotePowerShell(value: string): string {
 }
 
 export default {
-  fetch: app.fetch,
-  scheduled: async (_event, env) => {
-    await cleanupExpiredSessions(env);
-  }
+  fetch: app.fetch
 } satisfies ExportedHandler<Env>;

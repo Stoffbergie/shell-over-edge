@@ -32,6 +32,3 @@ mode = "smart"
 binding = "REMOTE_MAILBOX"
 bucket_name = "remote-stoff-dev-mailbox"
 preview_bucket_name = "remote-stoff-dev-mailbox-preview"
-
-[triggers]
-crons = ["*/30 * * * *"]
