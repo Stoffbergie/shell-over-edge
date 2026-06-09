@@ -1,6 +1,32 @@
 name = "remote-stoff-dev"
 main = "src/worker.ts"
 compatibility_date = "2026-06-09"
+account_id = "628c0e516646e33b3f22f2e8741bf0a5"
+workers_dev = true
+upload_source_maps = true
+compliance_region = "public"
+
+routes = [
+  { pattern = "remote.stoff.dev", custom_domain = true }
+]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[placement]
+mode = "smart"
 
 [assets]
 directory = "./public"
@@ -8,8 +34,8 @@ binding = "ASSETS"
 
 [[r2_buckets]]
 binding = "REMOTE_MAILBOX"
-bucket_name = "remote-stoff-dev"
-preview_bucket_name = "remote-stoff-dev-preview"
+bucket_name = "remote-stoff-dev-mailbox"
+preview_bucket_name = "remote-stoff-dev-mailbox-preview"
 
 [triggers]
 crons = ["*/30 * * * *"]
