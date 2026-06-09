@@ -215,6 +215,12 @@ Relay/direct load e2e:
 pnpm run test:load
 ```
 
+Linux container agent e2e, requiring Docker:
+
+```sh
+SOE_DOCKER_E2E=1 pnpm exec vitest run tests/e2e/linux-container-agent.test.ts
+```
+
 ## Cloudflare
 
 Required bindings:
