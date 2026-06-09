@@ -2,10 +2,11 @@ import type { Context, Hono } from "hono";
 import { powerShellAgentScript } from "../../agent/powershell";
 import { shellAgentScript } from "../../agent/shell";
 import type { SessionMeta } from "../../domain/session";
-import { maxCommandBytes, maxDirectCandidateBytes, sessionTtlMs } from "../../shared/config";
-import { BadRequestError, cleanString, normalizeTimeout, publicBaseUrl, readLimitedText, textResponse } from "../../shared/http";
+import { maxCommandBytes, maxDirectSignalBytes, sessionTtlMs } from "../../shared/config";
+import { BadRequestError, cleanString, jsonResponse, normalizeTimeout, publicBaseUrl, readLimitedText, textResponse } from "../../shared/http";
 import { logInfo } from "../../shared/log";
 import type { Env } from "../env";
+import { getIceServers } from "../services/ice-servers";
 import { sessionBridge } from "../services/session-bridge";
 import {
   expireIfNeeded,
@@ -25,9 +26,9 @@ export function registerSessionRoutes(app: SessionApp): void {
   app.post("/api/sessions", (c) => createSession(c, "shell"));
   app.post("/api/sessions.ps1", (c) => createSession(c, "powershell"));
   app.post("/api/sessions/:id/send", sendCommand);
-  app.post("/api/sessions/:id/candidates", publishCandidate);
-  app.get("/api/sessions/:id/candidates", listCandidates);
-  app.post("/api/sessions/:id/direct-attempts", recordDirectAttempt);
+  app.get("/api/sessions/:id/ice", iceServers);
+  app.post("/api/sessions/:id/signals", publishSignal);
+  app.get("/api/sessions/:id/signals", listSignals);
   app.post("/api/sessions/:id/hello", agentHello);
   app.get("/api/sessions/:id/next", agentNext);
   app.post("/api/sessions/:id/result/:commandId", agentResult);
@@ -70,12 +71,18 @@ async function sendCommand(c: SessionContext): Promise<Response> {
   });
 }
 
-async function publishCandidate(c: SessionContext): Promise<Response> {
+async function iceServers(c: SessionContext): Promise<Response> {
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
+  return jsonResponse(await getIceServers(c.env));
+}
+
+async function publishSignal(c: SessionContext): Promise<Response> {
   const guard = await requireSession(c.env, c.req.param("id"));
   if ("response" in guard) return guard.response;
 
-  const body = await readLimitedText(c.req.raw, maxDirectCandidateBytes);
-  return sessionBridge(c.env, guard.meta.id).fetch("https://session/candidates", {
+  const body = await readLimitedText(c.req.raw, maxDirectSignalBytes);
+  return sessionBridge(c.env, guard.meta.id).fetch("https://session/signals", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -84,26 +91,12 @@ async function publishCandidate(c: SessionContext): Promise<Response> {
   });
 }
 
-async function listCandidates(c: SessionContext): Promise<Response> {
+async function listSignals(c: SessionContext): Promise<Response> {
   const guard = await requireSession(c.env, c.req.param("id"));
   if ("response" in guard) return guard.response;
 
   const url = new URL(c.req.url);
-  return sessionBridge(c.env, guard.meta.id).fetch(`https://session/candidates${url.search}`);
-}
-
-async function recordDirectAttempt(c: SessionContext): Promise<Response> {
-  const guard = await requireSession(c.env, c.req.param("id"));
-  if ("response" in guard) return guard.response;
-
-  const body = await readLimitedText(c.req.raw, 2000);
-  return sessionBridge(c.env, guard.meta.id).fetch("https://session/direct-attempts", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body
-  });
+  return sessionBridge(c.env, guard.meta.id).fetch(`https://session/signals${url.search}`);
 }
 
 async function agentHello(c: SessionContext): Promise<Response> {

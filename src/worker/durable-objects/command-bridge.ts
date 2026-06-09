@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import type { DirectAttempt, DirectAttemptPayload, DirectCandidate, DirectCandidatePayload, DirectCandidateRole } from "../../domain/direct";
-import { normalizeDirectRole, normalizeDirectTransport, normalizeDirectUrl, normalizePriority, sortDirectCandidates } from "../../domain/direct";
-import { directCandidateTtlMs, maxCommandBytes, maxDirectCandidatesPerRole, maxResultBytes } from "../../shared/config";
+import type { DirectRole, DirectSignal, DirectSignalPayload } from "../../domain/direct";
+import { directSignalKey, normalizeDirectRole, normalizeDirectSignal, sortDirectSignals } from "../../domain/direct";
+import { directSignalTtlMs, maxCommandBytes, maxDirectSignalsPerRole, maxResultBytes } from "../../shared/config";
 import { base64Encode, randomId } from "../../shared/crypto";
 import { cleanString, jsonResponse, normalizeTimeout, readLimitedText, textResponse } from "../../shared/http";
 import { logInfo } from "../../shared/log";
@@ -38,8 +38,7 @@ export class CommandBridge extends DurableObject<Env> {
   private nextWaiters: ResponseWaiter[] = [];
   private resultWaiters = new Map<string, ResponseWaiter>();
   private recentCommands = new Map<string, number>();
-  private candidates: DirectCandidate[] = [];
-  private attempts: DirectAttempt[] = [];
+  private signals: DirectSignal[] = [];
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -50,9 +49,8 @@ export class CommandBridge extends DurableObject<Env> {
     if (url.pathname === "/send") return this.sendCommand(request);
     if (url.pathname === "/next") return this.nextCommand(request);
     if (url.pathname.startsWith("/result/")) return this.receiveResult(request, cleanString(url.pathname.slice("/result/".length), 200));
-    if (url.pathname === "/candidates" && request.method === "POST") return this.publishCandidate(request);
-    if (url.pathname === "/candidates" && request.method === "GET") return this.listCandidates(url.searchParams.get("role"));
-    if (url.pathname === "/direct-attempts" && request.method === "POST") return this.recordDirectAttempt(request);
+    if (url.pathname === "/signals" && request.method === "POST") return this.publishSignal(request);
+    if (url.pathname === "/signals" && request.method === "GET") return this.listSignals(url.searchParams.get("role"));
     if (url.pathname === "/end") return this.endSession();
     return textResponse("Not found\n", 404);
   }
@@ -135,58 +133,29 @@ export class CommandBridge extends DurableObject<Env> {
     return textResponse("ok\n");
   }
 
-  private async publishCandidate(request: Request): Promise<Response> {
-    const payload = await request.json().catch(() => ({})) as DirectCandidatePayload;
-    const role = normalizeDirectRole(payload.role);
-    const transport = normalizeDirectTransport(payload.transport);
-    const url = normalizeDirectUrl(payload.url);
-    if (!role || !transport || !url) return textResponse("Invalid direct candidate\n", 400);
-
+  private async publishSignal(request: Request): Promise<Response> {
+    const payload = await request.json().catch(() => ({})) as DirectSignalPayload;
     const now = Date.now();
-    const ttlSeconds = Number(payload.ttlSeconds);
-    const ttlMs = Number.isFinite(ttlSeconds) ? Math.min(Math.max(Math.trunc(ttlSeconds), 1), 120) * 1000 : directCandidateTtlMs;
-    const candidate: DirectCandidate = {
-      id: randomId(),
-      role,
-      transport,
-      url,
-      priority: normalizePriority(payload.priority),
-      createdAt: now,
-      expiresAt: now + ttlMs
-    };
+    const signal = normalizeDirectSignal(payload, randomId(), now, directSignalTtlMs);
+    if (!signal) return textResponse("Invalid direct signal\n", 400);
 
-    this.pruneCandidates(now);
-    this.candidates = [
-      candidate,
-      ...this.candidates.filter((item) => !(item.role === candidate.role && item.url === candidate.url))
+    this.pruneSignals(now);
+    this.signals = [
+      signal,
+      ...this.signals.filter((item) => directSignalKey(item) !== directSignalKey(signal))
     ];
-    this.trimCandidates(candidate.role);
-    logInfo("direct_candidate_published", { candidateId: candidate.id, role: candidate.role, priority: candidate.priority });
-    return jsonResponse(candidate, 201);
+    this.trimSignals(signal.role);
+    logInfo("direct_signal_published", { signalId: signal.id, role: signal.role, transport: signal.transport, priority: signal.priority });
+    return jsonResponse(signal, 201);
   }
 
-  private listCandidates(roleValue: string | null): Response {
+  private listSignals(roleValue: string | null): Response {
     const now = Date.now();
-    this.pruneCandidates(now);
+    this.pruneSignals(now);
     const role = roleValue ? normalizeDirectRole(roleValue) : undefined;
-    if (roleValue && !role) return textResponse("Invalid direct candidate role\n", 400);
-    const candidates = sortDirectCandidates(role ? this.candidates.filter((candidate) => candidate.role === role) : this.candidates);
-    return jsonResponse({ candidates });
-  }
-
-  private async recordDirectAttempt(request: Request): Promise<Response> {
-    const payload = await request.json().catch(() => ({})) as DirectAttemptPayload;
-    const attempt: DirectAttempt = {
-      candidateId: cleanString(payload.candidateId, 200),
-      ok: payload.ok === true,
-      latencyMs: normalizeLatency(payload.latencyMs),
-      reason: cleanString(payload.reason, 120),
-      createdAt: Date.now()
-    };
-    if (!attempt.candidateId) return textResponse("Invalid direct attempt\n", 400);
-    this.attempts = [attempt, ...this.attempts].slice(0, 40);
-    logInfo("direct_attempt", { candidateId: attempt.candidateId, ok: attempt.ok, latencyMs: attempt.latencyMs, reason: attempt.reason });
-    return textResponse("ok\n");
+    if (roleValue && !role) return textResponse("Invalid direct signal role\n", 400);
+    const signals = sortDirectSignals(role ? this.signals.filter((signal) => signal.role === role) : this.signals);
+    return jsonResponse({ signals });
   }
 
   private endSession(): Response {
@@ -204,8 +173,7 @@ export class CommandBridge extends DurableObject<Env> {
     this.resultWaiters.clear();
     this.recentCommands.clear();
     this.queued = [];
-    this.candidates = [];
-    this.attempts = [];
+    this.signals = [];
     return textResponse("ended\n");
   }
 
@@ -224,14 +192,14 @@ export class CommandBridge extends DurableObject<Env> {
     this.queued = this.queued.filter((command) => command.id !== commandId);
   }
 
-  private pruneCandidates(now: number): void {
-    this.candidates = this.candidates.filter((candidate) => candidate.expiresAt > now);
+  private pruneSignals(now: number): void {
+    this.signals = this.signals.filter((signal) => signal.expiresAt > now);
   }
 
-  private trimCandidates(role: DirectCandidateRole): void {
-    const keep = sortDirectCandidates(this.candidates.filter((candidate) => candidate.role === role)).slice(0, maxDirectCandidatesPerRole);
-    const keepIds = new Set(keep.map((candidate) => candidate.id));
-    this.candidates = this.candidates.filter((candidate) => candidate.role !== role || keepIds.has(candidate.id));
+  private trimSignals(role: DirectRole): void {
+    const keep = sortDirectSignals(this.signals.filter((signal) => signal.role === role)).slice(0, maxDirectSignalsPerRole);
+    const keepIds = new Set(keep.map((signal) => signal.id));
+    this.signals = this.signals.filter((signal) => signal.role !== role || keepIds.has(signal.id));
   }
 
   private markDelivered(command: BridgeCommand): void {
@@ -280,10 +248,4 @@ function commandResponse(command: BridgeCommand): Response {
 function parseExitCode(value: string | null): number {
   const parsed = Number(value || "0");
   return Number.isFinite(parsed) ? Math.trunc(parsed) : 1;
-}
-
-function normalizeLatency(value: unknown): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return 0;
-  return Math.min(Math.max(Math.trunc(parsed), 0), 60_000);
 }

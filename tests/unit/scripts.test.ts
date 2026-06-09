@@ -38,6 +38,11 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.ok(!script.includes("/api/agent/"));
   assert.ok(!script.includes("/start/"));
   assert.ok(!script.includes("?token" + "="));
+  assert.ok(!script.includes("/signals"));
+  assert.ok(!script.includes("/ice"));
+  assert.ok(!script.includes("stun.cloudflare.com"));
+  assert.ok(!script.includes("turn.cloudflare.com"));
+  assert.ok(!script.includes("RTCPeerConnection"));
 });
 
 test.skipIf(!sh)("generated shell agent is POSIX syntax-valid", async () => {
@@ -62,6 +67,11 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   assert.ok(!script.includes("/api/agent/"));
   assert.ok(!script.includes("/start/"));
   assert.ok(!script.includes("?token" + "="));
+  assert.ok(!script.includes("/signals"));
+  assert.ok(!script.includes("/ice"));
+  assert.ok(!script.includes("stun.cloudflare.com"));
+  assert.ok(!script.includes("turn.cloudflare.com"));
+  assert.ok(!script.includes("RTCPeerConnection"));
 });
 
 test.skipIf(!powerShell)("generated PowerShell agent parses", async () => {

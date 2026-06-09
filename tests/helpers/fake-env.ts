@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import type { Hono } from "hono";
-import type { DirectAttempt, DirectCandidate } from "../../src/domain/direct";
-import { normalizeDirectRole, normalizeDirectTransport, normalizeDirectUrl, normalizePriority, sortDirectCandidates } from "../../src/domain/direct";
+import type { DirectRole, DirectSignal, DirectSignalPayload } from "../../src/domain/direct";
+import { directSignalKey, normalizeDirectRole, normalizeDirectSignal, sortDirectSignals } from "../../src/domain/direct";
 import type { SessionMeta } from "../../src/domain/session";
 import type { Env } from "../../src/worker/env";
 
@@ -177,8 +177,7 @@ class FakeSessionBridge {
   private nextWaiters: BridgeWaiter[] = [];
   private resultWaiters = new Map<string, BridgeWaiter>();
   private recentCommands = new Map<string, number>();
-  private candidates: DirectCandidate[] = [];
-  private attempts: DirectAttempt[] = [];
+  private signals: DirectSignal[] = [];
 
   async fetch(request: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
     const url = new URL(String(request));
@@ -187,9 +186,8 @@ class FakeSessionBridge {
     if (url.pathname === "/send") return this.send(body);
     if (url.pathname === "/next") return this.next();
     if (url.pathname.startsWith("/result/")) return this.result(url.pathname.slice("/result/".length), url.searchParams.get("exit"), body);
-    if (url.pathname === "/candidates" && method === "POST") return this.publishCandidate(body);
-    if (url.pathname === "/candidates" && method === "GET") return this.listCandidates(url.searchParams.get("role"));
-    if (url.pathname === "/direct-attempts" && method === "POST") return this.recordDirectAttempt(body);
+    if (url.pathname === "/signals" && method === "POST") return this.publishSignal(body);
+    if (url.pathname === "/signals" && method === "GET") return this.listSignals(url.searchParams.get("role"));
     if (url.pathname === "/end" && method === "POST") return this.end();
     return new Response("Not found\n", { status: 404 });
   }
@@ -257,32 +255,18 @@ class FakeSessionBridge {
     return new Response("ok\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
   }
 
-  private publishCandidate(body: string): Response {
-    const payload = JSON.parse(body || "{}") as { role?: unknown; transport?: unknown; url?: unknown; priority?: unknown; ttlSeconds?: unknown };
-    const role = normalizeDirectRole(payload.role);
-    const transport = normalizeDirectTransport(payload.transport);
-    const url = normalizeDirectUrl(payload.url);
-    if (!role || !transport || !url) return new Response("Invalid direct candidate\n", { status: 400 });
-
+  private publishSignal(body: string): Response {
+    const payload = JSON.parse(body || "{}") as DirectSignalPayload;
     const now = Date.now();
-    const ttlSeconds = Number(payload.ttlSeconds);
-    const ttlMs = Number.isFinite(ttlSeconds) ? Math.min(Math.max(Math.trunc(ttlSeconds), 1), 120) * 1000 : 60_000;
-    const candidate: DirectCandidate = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      role,
-      transport,
-      url,
-      priority: normalizePriority(payload.priority),
-      createdAt: now,
-      expiresAt: now + ttlMs
-    };
-    this.pruneCandidates(now);
-    this.candidates = [
-      candidate,
-      ...this.candidates.filter((item) => !(item.role === candidate.role && item.url === candidate.url))
+    const signal = normalizeDirectSignal(payload, `${Date.now()}-${Math.random().toString(36).slice(2)}`, now, 60_000);
+    if (!signal) return new Response("Invalid direct signal\n", { status: 400 });
+    this.pruneSignals(now);
+    this.signals = [
+      signal,
+      ...this.signals.filter((item) => directSignalKey(item) !== directSignalKey(signal))
     ];
-    this.trimCandidates(role);
-    return new Response(JSON.stringify(candidate), {
+    this.trimSignals(signal.role);
+    return new Response(JSON.stringify(signal), {
       status: 201,
       headers: {
         "Cache-Control": "no-store",
@@ -291,32 +275,17 @@ class FakeSessionBridge {
     });
   }
 
-  private listCandidates(roleValue: string | null): Response {
-    this.pruneCandidates(Date.now());
+  private listSignals(roleValue: string | null): Response {
+    this.pruneSignals(Date.now());
     const role = roleValue ? normalizeDirectRole(roleValue) : undefined;
-    if (roleValue && !role) return new Response("Invalid direct candidate role\n", { status: 400 });
-    const candidates = sortDirectCandidates(role ? this.candidates.filter((candidate) => candidate.role === role) : this.candidates);
-    return new Response(JSON.stringify({ candidates }), {
+    if (roleValue && !role) return new Response("Invalid direct signal role\n", { status: 400 });
+    const signals = sortDirectSignals(role ? this.signals.filter((signal) => signal.role === role) : this.signals);
+    return new Response(JSON.stringify({ signals }), {
       headers: {
         "Cache-Control": "no-store",
         "Content-Type": "application/json; charset=utf-8"
       }
     });
-  }
-
-  private recordDirectAttempt(body: string): Response {
-    const payload = JSON.parse(body || "{}") as { candidateId?: unknown; ok?: unknown; latencyMs?: unknown; reason?: unknown };
-    const candidateId = typeof payload.candidateId === "string" ? payload.candidateId.slice(0, 200) : "";
-    if (!candidateId) return new Response("Invalid direct attempt\n", { status: 400 });
-    const latencyMs = Number(payload.latencyMs);
-    this.attempts = [{
-      candidateId,
-      ok: payload.ok === true,
-      latencyMs: Number.isFinite(latencyMs) ? Math.min(Math.max(Math.trunc(latencyMs), 0), 60_000) : 0,
-      reason: typeof payload.reason === "string" ? payload.reason.slice(0, 120) : "",
-      createdAt: Date.now()
-    }, ...this.attempts].slice(0, 40);
-    return new Response("ok\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
   }
 
   private end(): Response {
@@ -334,8 +303,7 @@ class FakeSessionBridge {
     this.nextWaiters = [];
     this.resultWaiters.clear();
     this.recentCommands.clear();
-    this.candidates = [];
-    this.attempts = [];
+    this.signals = [];
     return new Response("ended\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
   }
 
@@ -350,14 +318,14 @@ class FakeSessionBridge {
     waiter.resolve(commandResponse(command));
   }
 
-  private pruneCandidates(now: number): void {
-    this.candidates = this.candidates.filter((candidate) => candidate.expiresAt > now);
+  private pruneSignals(now: number): void {
+    this.signals = this.signals.filter((signal) => signal.expiresAt > now);
   }
 
-  private trimCandidates(role: "agent" | "client"): void {
-    const keep = sortDirectCandidates(this.candidates.filter((candidate) => candidate.role === role)).slice(0, 8);
-    const keepIds = new Set(keep.map((candidate) => candidate.id));
-    this.candidates = this.candidates.filter((candidate) => candidate.role !== role || keepIds.has(candidate.id));
+  private trimSignals(role: DirectRole): void {
+    const keep = sortDirectSignals(this.signals.filter((signal) => signal.role === role)).slice(0, 8);
+    const keepIds = new Set(keep.map((signal) => signal.id));
+    this.signals = this.signals.filter((signal) => signal.role !== role || keepIds.has(signal.id));
   }
 
   private markDelivered(command: BridgeCommand): void {
