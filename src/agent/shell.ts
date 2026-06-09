@@ -55,7 +55,15 @@ run_shell() {
   if command -v timeout >/dev/null 2>&1; then
     timeout "$timeout_seconds" sh -c "$command_body" > "$output_file" 2>&1
   else
-    sh -c "$command_body" > "$output_file" 2>&1
+    sh -c "$command_body" > "$output_file" 2>&1 &
+    command_pid=$!
+    ( sleep "$timeout_seconds"; kill "$command_pid" 2>/dev/null ) &
+    timeout_pid=$!
+    wait "$command_pid"
+    exit_code=$?
+    kill "$timeout_pid" 2>/dev/null || true
+    wait "$timeout_pid" 2>/dev/null || true
+    return "$exit_code"
   fi
 }
 
