@@ -76,7 +76,7 @@ test.skipIf(!sh || !curl)("generated POSIX agent script drains parallel relay se
   }
 });
 
-test.skipIf(!sh || !curl)("generated POSIX agent enforces command timeout without timeout binary", async () => {
+test.skipIf(process.platform === "win32" || !sh || !curl)("generated POSIX agent enforces command timeout without timeout binary", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
   const dir = await mkdtemp(join(tmpdir(), "soe-posix-no-timeout-"));

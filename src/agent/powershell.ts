@@ -135,14 +135,14 @@ function Run-Command([string]$CommandBody, [string]$Cwd, [string]$ResultFile, [i
       [IO.File]::WriteAllText($ResultFile, [string]$Result.Output)
       return [int]$Result.ExitCode
     }
-    Stop-Job $Job -Force
+    Stop-Job $Job -ErrorAction SilentlyContinue
     [IO.File]::WriteAllText($ResultFile, "Command timed out after $TimeoutSeconds seconds\`n")
     return 124
   } catch {
     [IO.File]::WriteAllText($ResultFile, $_.Exception.Message)
     return 1
   } finally {
-    if ($Job) { Remove-Job $Job -Force -ErrorAction SilentlyContinue }
+    if ($Job) { Remove-Job $Job -ErrorAction SilentlyContinue }
   }
 }
 
