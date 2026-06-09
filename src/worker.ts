@@ -2,7 +2,6 @@ import { Hono } from "hono";
 
 type Env = {
   REMOTE_MAILBOX: R2Bucket;
-  ASSETS: Fetcher;
   BASE_URL?: string;
 };
 
@@ -131,6 +130,7 @@ app.post("/", async (c) => {
   });
 });
 
+app.get("/", (c) => textResponse(terminalUsage(publicBaseUrl(c.req.raw, c.env))));
 app.get("/connect.sh", (c) => textResponse(simpleShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/x-shellscript"));
 app.get("/connect.ps1", (c) => textResponse(simplePowerShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/plain; charset=utf-8"));
 
@@ -527,15 +527,8 @@ app.get("/start/:file", async (c) => {
   return textResponse("Not found", 404);
 });
 
-app.get("/", (c) => c.env.ASSETS.fetch(c.req.raw));
-app.get("/app.js", (c) => c.env.ASSETS.fetch(c.req.raw));
-app.get("/styles.css", (c) => c.env.ASSETS.fetch(c.req.raw));
-
 app.notFound((c) => {
-  if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/start/")) {
-    return jsonResponse({ error: "Not found" }, 404);
-  }
-  return c.env.ASSETS.fetch(c.req.raw);
+  return c.req.path.startsWith("/api/") || c.req.path.startsWith("/start/") ? jsonResponse({ error: "Not found" }, 404) : textResponse("Not found\n", 404);
 });
 
 async function requireHelper(env: Env, request: Request, id: string, options: { allowTerminal?: boolean } = {}): Promise<HelperGuard> {
@@ -888,6 +881,20 @@ function safeFileName(path: string): string {
 
 function logInfo(event: string, fields: Record<string, unknown>): void {
   console.info(JSON.stringify({ event, ...fields, ts: new Date().toISOString() }));
+}
+
+function terminalUsage(baseUrl: string): string {
+  return `Remote Support
+
+Remote macOS/Linux:
+curl -fsSL ${baseUrl}/connect.sh | sh
+
+Remote Windows:
+irm "${baseUrl}/connect.ps1" | iex
+
+Helper:
+curl -sS ${baseUrl} -H "x-api-key: <uuid-from-clipboard>" --data-binary "pwd"
+`;
 }
 
 function metaKey(id: string): string {
