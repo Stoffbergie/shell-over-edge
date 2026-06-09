@@ -1110,7 +1110,6 @@ function simplePowerShellAgentScript(baseUrl: string): string {
 Add-Type -AssemblyName System.Net.Http
 $BaseUrl = ${quotePowerShell(baseUrl)}
 $Code = [guid]::NewGuid().ToString()
-$Headers = @{ "x-api-key" = $Code }
 $Clipboard = "copied to clipboard"
 $Client = New-Object System.Net.Http.HttpClient
 $Client.DefaultRequestHeaders.Add("x-api-key", $Code)
@@ -1123,7 +1122,12 @@ try {
 
 function Send-Bye {
   try {
-    Invoke-WebRequest -Uri "$BaseUrl/api/v1/$Code/bye" -Method Post -Headers $Headers -UseBasicParsing | Out-Null
+    $Request = [System.Net.WebRequest]::Create("$BaseUrl/api/v1/$Code/bye")
+    $Request.Method = "POST"
+    $Request.Headers.Add("x-api-key", $Code)
+    $Request.ContentLength = 0
+    $Response = $Request.GetResponse()
+    $Response.Close()
   } catch {}
 }
 
@@ -1149,8 +1153,22 @@ function Run-Command([string]$CommandId, [string]$Payload) {
   }
   if (Test-Path $ResultFile) { Get-Content $ResultFile -Raw | Write-Host }
   Write-Host "[exit $ExitCode]"
-  Invoke-WebRequest -Uri "$BaseUrl/api/v1/$Code/result/$CommandId?exit=$ExitCode" -Method Post -Headers $Headers -InFile $ResultFile -ContentType "application/octet-stream" -UseBasicParsing | Out-Null
+  Send-Result -CommandId $CommandId -ExitCode $ExitCode -ResultFile $ResultFile
   Remove-Item $ResultFile -Force
+}
+
+function Send-Result([string]$CommandId, [int]$ExitCode, [string]$ResultFile) {
+  $Bytes = [IO.File]::ReadAllBytes($ResultFile)
+  $Request = [System.Net.WebRequest]::Create("$BaseUrl/api/v1/$Code/result/$CommandId?exit=$ExitCode")
+  $Request.Method = "POST"
+  $Request.Headers.Add("x-api-key", $Code)
+  $Request.ContentType = "application/octet-stream"
+  $Request.ContentLength = $Bytes.Length
+  $Stream = $Request.GetRequestStream()
+  $Stream.Write($Bytes, 0, $Bytes.Length)
+  $Stream.Close()
+  $Response = $Request.GetResponse()
+  $Response.Close()
 }
 
 function Open-EventStream {
