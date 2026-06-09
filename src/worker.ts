@@ -113,7 +113,12 @@ app.post("/", async (c) => {
   if (!state || state.status !== "connected") return textResponse("No agent connected for that key", 404);
   const body = (await readLimitedText(c.req.raw, maxCommandBytes)).trim();
   if (!body) return textResponse("Command body is required", 400);
-  const command = await enqueueSimpleCommand(c.env, code, body, normalizeTimeout(c.req.header("x-timeout-seconds") || 30));
+  let command: SimpleCommandRecord;
+  try {
+    command = await enqueueSimpleCommand(c.env, code, body, normalizeTimeout(c.req.header("x-timeout-seconds") || 30));
+  } catch (error) {
+    return textResponse(error instanceof Error ? error.message : "Command conflict", 409);
+  }
   logInfo("v1_command_queued", { code, commandId: command.id });
   const result = await waitForSimpleCommand(c.env, code, command.id, Math.min(command.timeoutSeconds * 1000 + 8000, 55000));
   if (!result?.completedAt) {
@@ -622,6 +627,11 @@ async function commandResponse(env: Env, sessionId: string, command: CommandReco
 }
 
 async function enqueueSimpleCommand(env: Env, code: string, body: string, timeoutSeconds: number): Promise<SimpleCommandRecord> {
+  const pending = await getJson<SimpleCommandRecord>(env, simplePendingCommandKey(code));
+  if (pending && Date.now() - pending.createdAt < Math.max(pending.timeoutSeconds * 1000, 60000)) {
+    throw new Error("Another command is already waiting for this agent");
+  }
+  if (pending) await env.REMOTE_MAILBOX.delete(simplePendingCommandKey(code));
   const command: SimpleCommandRecord = {
     id: randomId(),
     status: "queued",
@@ -630,13 +640,15 @@ async function enqueueSimpleCommand(env: Env, code: string, body: string, timeou
     timeoutSeconds
   };
   await putJson(env, simpleCommandKey(code, command.id), command);
+  await putJson(env, simplePendingCommandKey(code), command);
   return command;
 }
 
 async function nextSimpleCommand(env: Env, code: string): Promise<SimpleCommandRecord | null> {
-  const commands = await listJsonObjects<SimpleCommandRecord>(env, `simple/${code}/commands/`);
-  commands.sort((a, b) => a.createdAt - b.createdAt);
-  return commands.find((command) => command.status === "queued") || null;
+  const command = await getJson<SimpleCommandRecord>(env, simplePendingCommandKey(code));
+  if (!command) return null;
+  await env.REMOTE_MAILBOX.delete(simplePendingCommandKey(code));
+  return command;
 }
 
 async function waitForSimpleCommand(env: Env, code: string, commandId: string, waitMs: number): Promise<SimpleCommandRecord | null> {
@@ -644,7 +656,7 @@ async function waitForSimpleCommand(env: Env, code: string, commandId: string, w
   while (Date.now() - started < waitMs) {
     const command = await getJson<SimpleCommandRecord>(env, simpleCommandKey(code, commandId));
     if (command?.completedAt) return command;
-    await sleepMs(750);
+    await sleepMs(250);
   }
   return getJson<SimpleCommandRecord>(env, simpleCommandKey(code, commandId));
 }
@@ -925,11 +937,15 @@ function simpleCommandKey(code: string, commandId: string): string {
   return `simple/${code}/commands/${commandId}.json`;
 }
 
+function simplePendingCommandKey(code: string): string {
+  return `simple/${code}/pending-command.json`;
+}
+
 function simpleShellAgentScript(baseUrl: string): string {
   return `#!/bin/sh
 set -u
 BASE_URL=${quoteShell(baseUrl)}
-POLL_SECONDS=1
+POLL_SECONDS=0.5
 
 new_uuid() {
   if command -v uuidgen >/dev/null 2>&1; then
@@ -1096,7 +1112,7 @@ try {
     $StatusCode = [int]$Response.StatusCode
     if ($StatusCode -eq 204) {
       Remove-Item $BodyFile, $ResultFile -Force
-      Start-Sleep -Seconds 1
+      Start-Sleep -Milliseconds 500
       continue
     }
     if ($StatusCode -eq 410 -or $StatusCode -eq 401 -or $StatusCode -eq 404) {
@@ -1107,7 +1123,7 @@ try {
     if ($StatusCode -ne 200) {
       if (Test-Path $BodyFile) { Get-Content $BodyFile -Raw | Write-Host }
       Remove-Item $BodyFile, $ResultFile -Force
-      Start-Sleep -Seconds 1
+      Start-Sleep -Milliseconds 500
       continue
     }
     $CommandId = [string]$Response.Headers["X-Command-Id"]
