@@ -1107,11 +1107,11 @@ done
 
 function simplePowerShellAgentScript(baseUrl: string): string {
   return `$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Net.Http
 $BaseUrl = ${quotePowerShell(baseUrl)}
 $Code = [guid]::NewGuid().ToString()
 $Clipboard = "copied to clipboard"
-$Client = [System.Net.Http.HttpClient]::new()
-$Client.Timeout = [TimeSpan]::FromMilliseconds(-1)
+$Client = New-Object System.Net.Http.HttpClient
 $Client.DefaultRequestHeaders.Add("x-api-key", $Code)
 
 try {
@@ -1122,7 +1122,7 @@ try {
 
 function Send-Bye {
   try {
-    $Content = [System.Net.Http.StringContent]::new("")
+    $Content = New-Object System.Net.Http.StringContent -ArgumentList ""
     $Client.PostAsync("$BaseUrl/api/v1/$Code/bye", $Content).Wait()
   } catch {}
 }
@@ -1150,7 +1150,7 @@ function Run-Command([string]$CommandId, [string]$Payload) {
   if (Test-Path $ResultFile) { Get-Content $ResultFile -Raw | Write-Host }
   Write-Host "[exit $ExitCode]"
   $Bytes = [IO.File]::ReadAllBytes($ResultFile)
-  $Content = [System.Net.Http.ByteArrayContent]::new($Bytes)
+  $Content = New-Object System.Net.Http.ByteArrayContent -ArgumentList @(,$Bytes)
   $Content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/octet-stream")
   $Client.PostAsync("$BaseUrl/api/v1/$Code/result/$CommandId?exit=$ExitCode", $Content).Result.EnsureSuccessStatusCode() | Out-Null
   Remove-Item $ResultFile -Force
@@ -1160,7 +1160,7 @@ function Open-EventStream {
   $Response = $Client.GetAsync("$BaseUrl/api/v1/$Code/events", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
   $Response.EnsureSuccessStatusCode() | Out-Null
   $Stream = $Response.Content.ReadAsStreamAsync().Result
-  return [System.IO.StreamReader]::new($Stream)
+  return New-Object System.IO.StreamReader -ArgumentList $Stream
 }
 
 Write-Host ""
