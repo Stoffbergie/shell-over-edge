@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-export function findCommand(names) {
+export function findCommand(names: string | string[]): string {
   for (const name of Array.isArray(names) ? names : [names]) {
     if (process.platform === "win32") {
       const result = spawnSync("where.exe", [name], { encoding: "utf8" });
@@ -13,6 +13,6 @@ export function findCommand(names) {
   return "";
 }
 
-function quoteShell(value) {
+function quoteShell(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }

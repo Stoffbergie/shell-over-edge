@@ -1,5 +1,5 @@
-import { quoteShell } from "./strings";
-import type { SessionMeta } from "./types";
+import type { SessionMeta } from "../domain/session";
+import { quoteShell } from "../shared/strings";
 
 export function shellAgentScript(baseUrl: string, meta: SessionMeta): string {
   return `#!/bin/sh

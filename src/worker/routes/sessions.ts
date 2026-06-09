@@ -1,17 +1,18 @@
 import type { Context, Hono } from "hono";
-import { maxCommandBytes, sessionTtlMs } from "./config";
-import { BadRequestError, cleanString, normalizeTimeout, publicBaseUrl, readLimitedText, textResponse } from "./http";
-import { logInfo } from "./log";
-import { powerShellAgentScript } from "./powershell-scripts";
-import { sessionBridge } from "./session-bridge";
-import { shellAgentScript } from "./shell-scripts";
+import { powerShellAgentScript } from "../../agent/powershell";
+import { shellAgentScript } from "../../agent/shell";
+import type { SessionMeta } from "../../domain/session";
+import { maxCommandBytes, sessionTtlMs } from "../../shared/config";
+import { BadRequestError, cleanString, normalizeTimeout, publicBaseUrl, readLimitedText, textResponse } from "../../shared/http";
+import { logInfo } from "../../shared/log";
+import type { Env } from "../env";
+import { sessionBridge } from "../services/session-bridge";
 import {
   expireIfNeeded,
   getJson,
   metaKey,
   putJson
-} from "./session-store";
-import type { Env, SessionMeta } from "./types";
+} from "../services/session-store";
 
 type SessionApp = Hono<{ Bindings: Env }>;
 type SessionContext = Context<{ Bindings: Env }>;

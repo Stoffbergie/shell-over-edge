@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { PayloadTooLargeError, BadRequestError, publicBaseUrl, textResponse } from "./http";
-import { registerSessionRoutes } from "./session-api";
-import { terminalUsage } from "./terminal-usage";
-import type { Env } from "./types";
+import { terminalUsage } from "../agent/terminal-usage";
+import { PayloadTooLargeError, BadRequestError, publicBaseUrl, textResponse } from "../shared/http";
+import type { Env } from "./env";
+import { registerSessionRoutes } from "./routes/sessions";
 
 export const app = new Hono<{ Bindings: Env }>();
 

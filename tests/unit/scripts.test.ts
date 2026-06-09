@@ -2,30 +2,25 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { test } from "node:test";
+import { test } from "vitest";
 import { strict as assert } from "node:assert";
-import { shellAgentScript } from "../../.tmp/test-build/src/shell-scripts.js";
-import { powerShellAgentScript } from "../../.tmp/test-build/src/powershell-scripts.js";
-import { findCommand } from "../helpers/commands.mjs";
+import { shellAgentScript } from "../../src/agent/shell";
+import { powerShellAgentScript } from "../../src/agent/powershell";
+import type { SessionMeta } from "../../src/domain/session";
+import { findCommand } from "../helpers/commands";
 
-const meta = {
+const meta: SessionMeta = {
   id: "550e8400-e29b-41d4-a716-446655440000",
   status: "waiting",
   createdAt: 0,
   expiresAt: Date.UTC(2030, 0, 1)
 };
 
-test("generated shell agent is POSIX syntax-valid and portable across common Unix environments", async (t) => {
-  const script = shellAgentScript("https://soe.test", meta);
-  const sh = findCommand("sh");
-  if (sh) {
-    await assertShellSyntax(sh, script);
-  } else if (process.platform !== "win32") {
-    assert.fail("sh is required to validate POSIX shell scripts on this platform");
-  } else {
-    t.diagnostic("sh is unavailable on this Windows runner; static portability checks still ran");
-  }
+const sh = findCommand("sh");
+const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershell.exe", "powershell"] : ["pwsh"]);
 
+test("generated shell agent is portable across common Unix environments", () => {
+  const script = shellAgentScript("https://soe.test", meta);
   assert.match(script, /SESSION_ID='550e8400-e29b-41d4-a716-446655440000'/);
   assert.match(script, /pbcopy/);
   assert.match(script, /wl-copy/);
@@ -45,7 +40,11 @@ test("generated shell agent is POSIX syntax-valid and portable across common Uni
   assert.ok(!script.includes("?token" + "="));
 });
 
-test("generated PowerShell agent parses and keeps Windows request fallbacks", async (t) => {
+test.skipIf(!sh)("generated shell agent is POSIX syntax-valid", async () => {
+  await assertShellSyntax(sh, shellAgentScript("https://soe.test", meta));
+});
+
+test("generated PowerShell agent keeps Windows request fallbacks", () => {
   const script = powerShellAgentScript("https://soe.test", meta);
 
   assert.match(script, /\$SessionId = "550e8400-e29b-41d4-a716-446655440000"/);
@@ -63,17 +62,13 @@ test("generated PowerShell agent parses and keeps Windows request fallbacks", as
   assert.ok(!script.includes("/api/agent/"));
   assert.ok(!script.includes("/start/"));
   assert.ok(!script.includes("?token" + "="));
-
-  const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershell.exe", "powershell"] : ["pwsh"]);
-  if (!powerShell) {
-    t.skip("PowerShell is not installed on this runner");
-    return;
-  }
-
-  await assertPowerShellParses(powerShell, script);
 });
 
-async function assertShellSyntax(sh, script) {
+test.skipIf(!powerShell)("generated PowerShell agent parses", async () => {
+  await assertPowerShellParses(powerShell, powerShellAgentScript("https://soe.test", meta));
+});
+
+async function assertShellSyntax(sh: string, script: string): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "soe-shell-"));
   const file = join(dir, "agent.sh");
   await writeFile(file, script);
@@ -82,7 +77,7 @@ async function assertShellSyntax(sh, script) {
   assert.equal(result.status, 0, result.stderr);
 }
 
-async function assertPowerShellParses(powerShell, script) {
+async function assertPowerShellParses(powerShell: string, script: string): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "soe-pwsh-"));
   const file = join(dir, "agent.ps1");
   await writeFile(file, script);

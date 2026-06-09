@@ -1,7 +1,7 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import { strict as assert } from "node:assert";
-import { app } from "../../.tmp/test-build/src/app.js";
-import { createSession, createTestEnv, text } from "../helpers/fake-env.mjs";
+import { app } from "../../src/worker/app";
+import { createSession, createTestEnv, text, type TestFixture } from "../helpers/fake-env";
 
 console.info = () => {};
 
@@ -50,7 +50,7 @@ test("send waits for the agent result and returns plain command output", async (
   const nextJson = await waitForNext(session.id, fixture);
   assert.equal(nextJson.headers.get("X-Command-Type"), "shell");
   assert.equal(nextJson.headers.get("X-Command-Timeout"), "12");
-  assert.equal(Buffer.from(nextJson.headers.get("X-Command-Cwd-Base64"), "base64").toString("utf8"), "/tmp");
+  assert.equal(Buffer.from(nextJson.headers.get("X-Command-Cwd-Base64") || "", "base64").toString("utf8"), "/tmp");
   assert.equal(await text(nextJson), "pwd");
 
   const resultJson = await app.request(`/api/sessions/${session.id}/result/${nextJson.headers.get("X-Command-Id")}?exit=0`, {
@@ -116,7 +116,7 @@ test("invalid sessions, bad send payloads, and retired routes return text errors
   assert.equal(await text(blocked), "Session ended\n");
 });
 
-async function waitForNext(sessionId, fixture) {
+async function waitForNext(sessionId: string, fixture: TestFixture): Promise<Response> {
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const response = await app.request(`/api/sessions/${sessionId}/next`, {}, fixture.env, fixture.ctx);
     if (response.status === 200) return response;
@@ -126,6 +126,6 @@ async function waitForNext(sessionId, fixture) {
   throw new Error("Timed out waiting for queued command");
 }
 
-function sleep(ms) {
+function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

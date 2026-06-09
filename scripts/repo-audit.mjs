@@ -21,8 +21,11 @@ const requiredFiles = [
   ".github/workflows/labeler.yml",
   ".github/workflows/release.yml",
   "LICENSE",
+  "pnpm-workspace.yaml",
   "scripts/repo-audit.mjs",
-  "scripts/smoke-prod.mjs"
+  "scripts/smoke-prod.mjs",
+  "tsconfig.test.json",
+  "vitest.config.ts"
 ];
 
 const textFiles = [];
@@ -56,6 +59,7 @@ async function main() {
   for (const file of textFiles) {
     const rel = relative(root, file);
     if (rel === "pnpm-lock.yaml") continue;
+    if (rel.startsWith("tests/") && rel.endsWith(".mjs")) failures.push(`${rel} must be a Vitest TypeScript test file`);
     const text = await readText(file).catch(() => "");
     for (const value of banned) {
       if (text.includes(value)) failures.push(`${rel} contains ${value}`);
@@ -65,9 +69,12 @@ async function main() {
   const pkg = JSON.parse(await readText(join(root, "package.json")));
   if (pkg.name !== "soe") failures.push("package.json name must be soe");
   if (pkg.private !== false) failures.push("package.json private must be false");
-  if (pkg.description !== "Temporary shell and file access through Cloudflare Workers.") failures.push("package.json description is wrong");
+  if (pkg.description !== "Temporary shell access through Cloudflare Workers.") failures.push("package.json description is wrong");
   if (pkg.homepage !== "https://soe.stoff.dev") failures.push("package.json homepage must be https://soe.stoff.dev");
   if (pkg.repository?.url !== "https://github.com/Stoffberg/shell-over-edge.git") failures.push("package.json repository URL is wrong");
+  if (pkg.scripts?.test !== "vitest run") failures.push("package.json test script must use Vitest");
+  if (!pkg.scripts?.["typecheck:test"]) failures.push("package.json missing typecheck:test");
+  if (!pkg.devDependencies?.vitest) failures.push("package.json missing vitest");
 
   const wrangler = await readText(join(root, "wrangler.toml"));
   for (const value of ['name = "soe"', 'BASE_URL = "https://soe.stoff.dev"', 'pattern = "soe.stoff.dev"', 'bucket_name = "soe-mailbox"']) {
@@ -76,7 +83,9 @@ async function main() {
 
   const readme = await readText(join(root, "README.md"));
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
-  if (!readme.includes("Temporary shell and file access through Cloudflare Workers.")) failures.push("README one-liner is wrong");
+  if (!readme.includes("Temporary shell access through Cloudflare Workers.")) failures.push("README one-liner is wrong");
+  if (readme.includes("Authorization: Bearer")) failures.push("README must not document retired bearer-token API");
+  if (readme.includes("/commands")) failures.push("README must not document retired commands endpoint");
 
   if (failures.length > 0) {
     console.error(failures.join("\n"));

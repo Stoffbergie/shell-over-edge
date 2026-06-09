@@ -1,7 +1,7 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import { strict as assert } from "node:assert";
-import { cleanString, jsonResponse, normalizeTimeout, readLimitedText, textResponse } from "../../.tmp/test-build/src/http.js";
-import { PayloadTooLargeError } from "../../.tmp/test-build/src/http.js";
+import { cleanString, jsonResponse, normalizeTimeout, readLimitedText, textResponse } from "../../src/shared/http";
+import { PayloadTooLargeError } from "../../src/shared/http";
 
 test("normalizes and bounds command timeouts", () => {
   assert.equal(normalizeTimeout("0"), 1);

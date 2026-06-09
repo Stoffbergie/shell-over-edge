@@ -1,4 +1,4 @@
-import type { Env } from "./types";
+import type { Env } from "../worker/env";
 
 const textDecoder = new TextDecoder();
 

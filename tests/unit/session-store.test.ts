@@ -1,7 +1,8 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import { strict as assert } from "node:assert";
-import { cleanupExpiredSessions, getJson, metaKey, putJson } from "../../.tmp/test-build/src/session-store.js";
-import { createTestEnv } from "../helpers/fake-env.mjs";
+import { cleanupExpiredSessions, getJson, metaKey, putJson } from "../../src/worker/services/session-store";
+import type { SessionMeta } from "../../src/domain/session";
+import { createTestEnv } from "../helpers/fake-env";
 
 test("cleanup expires old active sessions and deletes retained data", async () => {
   const { env, mailbox } = createTestEnv();
@@ -24,7 +25,7 @@ test("cleanup expires old active sessions and deletes retained data", async () =
 
   await cleanupExpiredSessions(env);
 
-  assert.equal((await getJson(env, metaKey(expiring.id))).status, "expired");
+  assert.equal((await getJson<SessionMeta>(env, metaKey(expiring.id)))?.status, "expired");
   assert.equal(await mailbox.get(metaKey(retained.id)), null);
   assert.equal(await mailbox.get(`sessions/${retained.id}/commands/cmd.json`), null);
 });
