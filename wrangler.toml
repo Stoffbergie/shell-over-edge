@@ -32,3 +32,11 @@ mode = "smart"
 binding = "REMOTE_MAILBOX"
 bucket_name = "remote-stoff-dev-mailbox"
 preview_bucket_name = "remote-stoff-dev-mailbox-preview"
+
+[[durable_objects.bindings]]
+name = "COMMAND_BRIDGES"
+class_name = "CommandBridge"
+
+[[migrations]]
+tag = "v1-command-bridge"
+new_sqlite_classes = ["CommandBridge"]

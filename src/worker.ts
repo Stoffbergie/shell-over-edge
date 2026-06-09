@@ -1,7 +1,9 @@
 import { Hono } from "hono";
+import { DurableObject } from "cloudflare:workers";
 
 type Env = {
   REMOTE_MAILBOX: R2Bucket;
+  COMMAND_BRIDGES: DurableObjectNamespace<CommandBridge>;
   BASE_URL?: string;
 };
 
@@ -84,6 +86,12 @@ type SimpleCommandRecord = {
   output?: string;
 };
 
+type CommandWaiter = {
+  commandId: string;
+  resolve: (response: Response) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 type HelperGuard = { meta: SessionMeta } | { response: Response };
 type AgentGuard = { meta: SessionMeta } | { response: Response };
 
@@ -94,6 +102,116 @@ const maxFileBytes = 1024 * 1024;
 const maxResultBytes = 1024 * 1024;
 const maxCommandBytes = 64 * 1024;
 const textEncoder = new TextEncoder();
+
+export class CommandBridge extends DurableObject<Env> {
+  private agentWriter?: WritableStreamDefaultWriter<Uint8Array>;
+  private waiter?: CommandWaiter;
+  private keepAlive?: ReturnType<typeof setInterval>;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/events") return this.openEvents(request);
+    if (url.pathname === "/command") return this.runCommand(request);
+    if (url.pathname.startsWith("/result/")) return this.receiveResult(request, url.pathname.slice("/result/".length));
+    if (url.pathname === "/bye") return this.closeAgent();
+    return textResponse("Not found\n", 404);
+  }
+
+  private openEvents(request: Request): Response {
+    this.closeWriter();
+    const stream = new TransformStream<Uint8Array, Uint8Array>();
+    this.agentWriter = stream.writable.getWriter();
+    this.writeSse("event: connected\ndata: ok\n\n");
+    this.keepAlive = setInterval(() => {
+      this.writeSse(": keepalive\n\n");
+    }, 15000);
+    request.signal.addEventListener("abort", () => {
+      this.closeWriter();
+    });
+    logInfo("v1_agent_connected", { objectId: this.ctx.id.toString() });
+    return new Response(stream.readable, {
+      headers: {
+        "Cache-Control": "no-store",
+        "Connection": "keep-alive",
+        "Content-Type": "text/event-stream; charset=utf-8"
+      }
+    });
+  }
+
+  private async runCommand(request: Request): Promise<Response> {
+    if (!this.agentWriter) return textResponse("No agent connected for that key\n", 404);
+    if (this.waiter) return textResponse("Another command is already running for this agent\n", 409);
+    const body = (await readLimitedText(request, maxCommandBytes)).trim();
+    if (!body) return textResponse("Command body is required\n", 400);
+    const commandId = randomId();
+    const timeoutSeconds = normalizeTimeout(request.headers.get("x-timeout-seconds") || 30);
+    const waitMs = Math.min(timeoutSeconds * 1000 + 5000, 55000);
+    let resolveResult!: (response: Response) => void;
+    const result = new Promise<Response>((resolve) => {
+      resolveResult = resolve;
+    });
+    const timer = setTimeout(() => {
+      if (this.waiter?.commandId === commandId) this.waiter = undefined;
+      resolveResult(textResponse(`Command ${commandId} timed out waiting for a result\n`, 504));
+    }, waitMs);
+    this.waiter = { commandId, resolve: resolveResult, timer };
+    try {
+      await this.writeSse(`event: command\nid: ${commandId}\ndata: ${timeoutSeconds}:${base64Encode(body)}\n\n`);
+    } catch {
+      clearTimeout(timer);
+      if (this.waiter?.commandId === commandId) this.waiter = undefined;
+      this.closeWriter();
+      return textResponse("Agent disconnected\n", 404);
+    }
+    logInfo("v1_command_sent", { commandId });
+    return result;
+  }
+
+  private async receiveResult(request: Request, commandId: string): Promise<Response> {
+    if (!this.waiter || this.waiter.commandId !== commandId) return jsonResponse({ error: "Command not found" }, 404);
+    const exitCode = Number(new URL(request.url).searchParams.get("exit") || "0");
+    const output = await readLimitedText(request, maxResultBytes);
+    const waiter = this.waiter;
+    clearTimeout(waiter.timer);
+    this.waiter = undefined;
+    logInfo("v1_command_result", { commandId, exitCode, status: exitCode === 0 ? "completed" : "failed" });
+    waiter.resolve(new Response(output, {
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Command-Id": commandId,
+        "X-Exit-Code": String(exitCode)
+      }
+    }));
+    return jsonResponse({ ok: true });
+  }
+
+  private closeAgent(): Response {
+    this.closeWriter();
+    if (this.waiter) {
+      clearTimeout(this.waiter.timer);
+      this.waiter.resolve(textResponse("Agent disconnected\n", 410));
+      this.waiter = undefined;
+    }
+    logInfo("v1_agent_stopped", { objectId: this.ctx.id.toString() });
+    return jsonResponse({ ok: true });
+  }
+
+  private async writeSse(value: string): Promise<void> {
+    await this.agentWriter?.write(textEncoder.encode(value));
+  }
+
+  private closeWriter(): void {
+    if (this.keepAlive) clearInterval(this.keepAlive);
+    this.keepAlive = undefined;
+    this.agentWriter?.close().catch(() => undefined);
+    this.agentWriter = undefined;
+  }
+}
 
 app.use("*", async (c, next) => {
   await next();
@@ -109,29 +227,15 @@ app.use("*", async (c, next) => {
 app.post("/", async (c) => {
   const code = apiKey(c.req.raw);
   if (!code) return textResponse("Missing or invalid x-api-key UUID", 401);
-  const state = await waitForSimpleAgent(c.env, code, 10000);
-  if (!state || state.status !== "connected") return textResponse("No agent connected for that key", 404);
   const body = (await readLimitedText(c.req.raw, maxCommandBytes)).trim();
   if (!body) return textResponse("Command body is required", 400);
-  let command: SimpleCommandRecord;
-  try {
-    command = await enqueueSimpleCommand(c.env, code, body, normalizeTimeout(c.req.header("x-timeout-seconds") || 30));
-  } catch (error) {
-    return textResponse(error instanceof Error ? error.message : "Command conflict", 409);
-  }
-  logInfo("v1_command_queued", { code, commandId: command.id });
-  const result = await waitForSimpleCommand(c.env, code, command.id, Math.min(command.timeoutSeconds * 1000 + 8000, 55000));
-  if (!result?.completedAt) {
-    return textResponse(`Command queued as ${command.id}, but no result arrived before the HTTP wait timeout.\n`, 504);
-  }
-  return new Response(result.output || "", {
-    status: 200,
+  return bridgeStub(c.env, code).fetch("https://bridge/command", {
+    method: "POST",
     headers: {
-      "Cache-Control": "no-store",
       "Content-Type": "text/plain; charset=utf-8",
-      "X-Command-Id": result.id,
-      "X-Exit-Code": String(result.exitCode ?? 0)
-    }
+      "X-Timeout-Seconds": String(normalizeTimeout(c.req.header("x-timeout-seconds") || 30))
+    },
+    body
   });
 });
 
@@ -139,76 +243,26 @@ app.get("/", (c) => textResponse(terminalUsage(publicBaseUrl(c.req.raw, c.env)))
 app.get("/connect.sh", (c) => textResponse(simpleShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/x-shellscript"));
 app.get("/connect.ps1", (c) => textResponse(simplePowerShellAgentScript(publicBaseUrl(c.req.raw, c.env)), 200, "text/plain; charset=utf-8"));
 
-app.post("/api/v1/:code/hello", async (c) => {
+app.get("/api/v1/:code/events", async (c) => {
   const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
   if ("response" in guard) return guard.response;
-  const payload = await readJson<{ platform?: string; user?: string; cwd?: string }>(c.req.raw).catch((): { platform?: string; user?: string; cwd?: string } => ({}));
-  const now = Date.now();
-  const state: SimpleAgentState = {
-    code: guard.code,
-    status: "connected",
-    connectedAt: now,
-    seenAt: now,
-    platform: cleanString(payload.platform, 120),
-    user: cleanString(payload.user, 120),
-    cwd: cleanString(payload.cwd, 500)
-  };
-  await putJson(c.env, simpleStateKey(guard.code), state);
-  logInfo("v1_agent_connected", { code: guard.code, platform: state.platform });
-  return jsonResponse({ ok: true });
-});
-
-app.get("/api/v1/:code/next", async (c) => {
-  const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
-  if ("response" in guard) return guard.response;
-  const state = await getJson<SimpleAgentState>(c.env, simpleStateKey(guard.code));
-  if (!state || state.status !== "connected") return jsonResponse({ error: "Agent not registered" }, 404);
-  await putJson(c.env, simpleStateKey(guard.code), { ...state, seenAt: Date.now() });
-  const command = await nextSimpleCommand(c.env, guard.code);
-  if (!command) return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
-  const running = { ...command, status: "running" as const, startedAt: Date.now() };
-  await putJson(c.env, simpleCommandKey(guard.code, command.id), running);
-  logInfo("v1_command_started", { code: guard.code, commandId: command.id });
-  return new Response(command.body, {
-    status: 200,
-    headers: {
-      "Cache-Control": "no-store",
-      "Content-Type": "text/plain; charset=utf-8",
-      "X-Command-Id": command.id,
-      "X-Command-Timeout": String(command.timeoutSeconds)
-    }
-  });
+  return bridgeStub(c.env, guard.code).fetch("https://bridge/events");
 });
 
 app.post("/api/v1/:code/result/:commandId", async (c) => {
   const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
   if ("response" in guard) return guard.response;
   const commandId = cleanString(c.req.param("commandId"), 200);
-  const command = await getJson<SimpleCommandRecord>(c.env, simpleCommandKey(guard.code, commandId));
-  if (!command) return jsonResponse({ error: "Command not found" }, 404);
-  const exitCode = Number(new URL(c.req.url).searchParams.get("exit") || "0");
-  const output = await readLimitedText(c.req.raw, maxResultBytes);
-  const done = {
-    ...command,
-    status: exitCode === 0 ? "completed" as const : "failed" as const,
-    completedAt: Date.now(),
-    exitCode,
-    output
-  };
-  await putJson(c.env, simpleCommandKey(guard.code, command.id), done);
-  logInfo("v1_command_result", { code: guard.code, commandId: command.id, exitCode, status: done.status });
-  return jsonResponse({ ok: true });
+  return bridgeStub(c.env, guard.code).fetch(`https://bridge/result/${commandId}${new URL(c.req.url).search}`, {
+    method: "POST",
+    body: c.req.raw.body
+  });
 });
 
 app.post("/api/v1/:code/bye", async (c) => {
   const guard = requireSimpleCode(c.req.raw, c.req.param("code"));
   if ("response" in guard) return guard.response;
-  const state = await getJson<SimpleAgentState>(c.env, simpleStateKey(guard.code));
-  if (state) {
-    await putJson(c.env, simpleStateKey(guard.code), { ...state, status: "stopped" as const, seenAt: Date.now() });
-  }
-  logInfo("v1_agent_stopped", { code: guard.code });
-  return jsonResponse({ ok: true });
+  return bridgeStub(c.env, guard.code).fetch("https://bridge/bye", { method: "POST" });
 });
 
 app.post("/api/sessions", async (c) => {
@@ -845,6 +899,10 @@ function publicBaseUrl(request: Request, env: Env): string {
   return (env.BASE_URL || new URL(request.url).origin).replace(/\/$/, "");
 }
 
+function bridgeStub(env: Env, code: string): DurableObjectStub {
+  return env.COMMAND_BRIDGES.get(env.COMMAND_BRIDGES.idFromName(code));
+}
+
 function cleanString(value: unknown, maxLength: number): string {
   return typeof value === "string" ? value.slice(0, maxLength) : "";
 }
@@ -945,7 +1003,6 @@ function simpleShellAgentScript(baseUrl: string): string {
   return `#!/bin/sh
 set -u
 BASE_URL=${quoteShell(baseUrl)}
-POLL_SECONDS=0.5
 
 new_uuid() {
   if command -v uuidgen >/dev/null 2>&1; then
@@ -977,12 +1034,36 @@ copy_text() {
   fi
 }
 
-header_value() {
-  awk -F': ' -v name="$1" 'tolower($1) == tolower(name) { sub("\\r$", "", $2); print $2; exit }' "$2"
+decode_b64() {
+  if command -v base64 >/dev/null 2>&1; then
+    printf '%s' "$1" | base64 --decode 2>/dev/null || printf '%s' "$1" | base64 -D 2>/dev/null || printf ''
+  else
+    printf ''
+  fi
 }
 
 post_bye() {
   curl -fsS -X POST -H "x-api-key: $CODE" "$BASE_URL/api/v1/$CODE/bye" >/dev/null 2>&1 || true
+}
+
+run_command() {
+  command_id=$1
+  payload=$2
+  timeout_seconds=\${payload%%:*}
+  command_b64=\${payload#*:}
+  command_body=$(decode_b64 "$command_b64")
+  result_file=$(mktemp)
+  printf '\\n$ %s\\n' "$command_body"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_seconds" sh -c "$command_body" > "$result_file" 2>&1
+  else
+    sh -c "$command_body" > "$result_file" 2>&1
+  fi
+  exit_code=$?
+  cat "$result_file"
+  printf '\\n[exit %s]\\n' "$exit_code"
+  curl -fsS -X POST -H "x-api-key: $CODE" --data-binary "@$result_file" "$BASE_URL/api/v1/$CODE/result/$command_id?exit=$exit_code" >/dev/null || true
+  rm -f "$result_file"
 }
 
 CODE=$(new_uuid)
@@ -999,46 +1080,27 @@ fi
 
 printf '\\nRemote Support\\n\\nCode: %s (%s)\\n\\nHelper command:\\ncurl -sS %s -H "x-api-key: %s" --data-binary "pwd"\\n\\nStop anytime: Ctrl+C\\n\\n' "$CODE" "$CLIPBOARD" "$BASE_URL" "$CODE"
 trap 'post_bye; exit 0' INT TERM EXIT
-curl -fsS -X POST -H "x-api-key: $CODE" "$BASE_URL/api/v1/$CODE/hello" >/dev/null
 
 while true; do
-  headers_file=$(mktemp)
-  body_file=$(mktemp)
-  status_code=$(curl -sS -D "$headers_file" -o "$body_file" -w "%{http_code}" -H "x-api-key: $CODE" "$BASE_URL/api/v1/$CODE/next" || printf '000')
-  if [ "$status_code" = "204" ]; then
-    rm -f "$headers_file" "$body_file"
-    sleep "$POLL_SECONDS"
-    continue
-  fi
-  if [ "$status_code" = "410" ] || [ "$status_code" = "404" ] || [ "$status_code" = "401" ]; then
-    cat "$body_file"
-    printf '\\n'
-    rm -f "$headers_file" "$body_file"
-    exit 0
-  fi
-  if [ "$status_code" != "200" ]; then
-    cat "$body_file"
-    printf '\\n'
-    rm -f "$headers_file" "$body_file"
-    sleep "$POLL_SECONDS"
-    continue
-  fi
-  command_id=$(header_value X-Command-Id "$headers_file")
-  timeout_seconds=$(header_value X-Command-Timeout "$headers_file")
-  [ -n "$timeout_seconds" ] || timeout_seconds=30
-  command_body=$(cat "$body_file")
-  result_file=$(mktemp)
-  printf '\\n$ %s\\n' "$command_body"
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$timeout_seconds" sh -c "$command_body" > "$result_file" 2>&1
-  else
-    sh -c "$command_body" > "$result_file" 2>&1
-  fi
-  exit_code=$?
-  cat "$result_file"
-  printf '\\n[exit %s]\\n' "$exit_code"
-  curl -fsS -X POST -H "x-api-key: $CODE" --data-binary "@$result_file" "$BASE_URL/api/v1/$CODE/result/$command_id?exit=$exit_code" >/dev/null || true
-  rm -f "$headers_file" "$body_file" "$result_file"
+  event_type=''
+  event_id=''
+  event_data=''
+  curl -fsS -N -H "x-api-key: $CODE" "$BASE_URL/api/v1/$CODE/events" | while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      event:\\ *) event_type=\${line#event: } ;;
+      id:\\ *) event_id=\${line#id: } ;;
+      data:\\ *) event_data=\${line#data: } ;;
+      "")
+        if [ "$event_type" = "command" ] && [ -n "$event_id" ] && [ -n "$event_data" ]; then
+          run_command "$event_id" "$event_data"
+        fi
+        event_type=''
+        event_id=''
+        event_data=''
+        ;;
+    esac
+  done
+  sleep 1
 done
 `;
 }
@@ -1047,8 +1109,10 @@ function simplePowerShellAgentScript(baseUrl: string): string {
   return `$ErrorActionPreference = "Stop"
 $BaseUrl = ${quotePowerShell(baseUrl)}
 $Code = [guid]::NewGuid().ToString()
-$Headers = @{ "x-api-key" = $Code }
 $Clipboard = "copied to clipboard"
+$Client = [System.Net.Http.HttpClient]::new()
+$Client.Timeout = [TimeSpan]::FromMilliseconds(-1)
+$Client.DefaultRequestHeaders.Add("x-api-key", $Code)
 
 try {
   Set-Clipboard -Value $Code
@@ -1056,40 +1120,47 @@ try {
   $Clipboard = "clipboard copy unavailable"
 }
 
-function Invoke-AgentRequest {
-  param([string]$Method, [string]$Path, [string]$OutFile, [object]$Body, [string]$ContentType)
-  $Parameters = @{
-    Uri = "$BaseUrl$Path"
-    Method = $Method
-    Headers = $Headers
-    UseBasicParsing = $true
-  }
-  if ($OutFile) { $Parameters.OutFile = $OutFile }
-  if ($null -ne $Body) { $Parameters.Body = $Body }
-  if ($ContentType) { $Parameters.ContentType = $ContentType }
-  try {
-    return Invoke-WebRequest @Parameters
-  } catch {
-    if ($_.Exception.Response) { return $_.Exception.Response }
-    throw
-  }
-}
-
 function Send-Bye {
-  try { Invoke-AgentRequest -Method Post -Path "/api/v1/$Code/bye" | Out-Null } catch {}
+  try {
+    $Content = [System.Net.Http.StringContent]::new("")
+    $Client.PostAsync("$BaseUrl/api/v1/$Code/bye", $Content).Wait()
+  } catch {}
 }
 
-function Run-Command([string]$CommandBody, [string]$ResultFile) {
+function Decode-Base64Text([string]$Value) {
+  return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Value))
+}
+
+function Run-Command([string]$CommandId, [string]$Payload) {
+  $Parts = $Payload.Split(":", 2)
+  if ($Parts.Count -lt 2) { return }
+  $CommandBody = Decode-Base64Text $Parts[1]
+  $ResultFile = [IO.Path]::GetTempFileName()
+  Write-Host ""
+  Write-Host "$ $CommandBody"
   try {
     $global:LASTEXITCODE = 0
     $Output = & ([scriptblock]::Create($CommandBody)) *>&1 | Out-String
     $ExitCode = if ($null -ne $global:LASTEXITCODE) { [int]$global:LASTEXITCODE } else { 0 }
     [IO.File]::WriteAllText($ResultFile, $Output)
-    return $ExitCode
   } catch {
     [IO.File]::WriteAllText($ResultFile, $_.Exception.Message)
-    return 1
+    $ExitCode = 1
   }
+  if (Test-Path $ResultFile) { Get-Content $ResultFile -Raw | Write-Host }
+  Write-Host "[exit $ExitCode]"
+  $Bytes = [IO.File]::ReadAllBytes($ResultFile)
+  $Content = [System.Net.Http.ByteArrayContent]::new($Bytes)
+  $Content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/octet-stream")
+  $Client.PostAsync("$BaseUrl/api/v1/$Code/result/$CommandId?exit=$ExitCode", $Content).Result.EnsureSuccessStatusCode() | Out-Null
+  Remove-Item $ResultFile -Force
+}
+
+function Open-EventStream {
+  $Response = $Client.GetAsync("$BaseUrl/api/v1/$Code/events", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+  $Response.EnsureSuccessStatusCode() | Out-Null
+  $Stream = $Response.Content.ReadAsStreamAsync().Result
+  return [System.IO.StreamReader]::new($Stream)
 }
 
 Write-Host ""
@@ -1104,40 +1175,35 @@ Write-Host "Stop anytime: Ctrl+C"
 Write-Host ""
 
 try {
-  Invoke-AgentRequest -Method Post -Path "/api/v1/$Code/hello" | Out-Null
   while ($true) {
-    $BodyFile = [IO.Path]::GetTempFileName()
-    $ResultFile = [IO.Path]::GetTempFileName()
-    $Response = Invoke-AgentRequest -Method Get -Path "/api/v1/$Code/next" -OutFile $BodyFile
-    $StatusCode = [int]$Response.StatusCode
-    if ($StatusCode -eq 204) {
-      Remove-Item $BodyFile, $ResultFile -Force
-      Start-Sleep -Milliseconds 500
-      continue
+    try {
+      $Reader = Open-EventStream
+      $EventType = ""
+      $EventId = ""
+      $EventData = ""
+      while ($null -ne ($Line = $Reader.ReadLine())) {
+        if ($Line.StartsWith("event: ")) {
+          $EventType = $Line.Substring(7)
+        } elseif ($Line.StartsWith("id: ")) {
+          $EventId = $Line.Substring(4)
+        } elseif ($Line.StartsWith("data: ")) {
+          $EventData = $Line.Substring(6)
+        } elseif ($Line -eq "") {
+          if ($EventType -eq "command" -and $EventId -and $EventData) {
+            Run-Command -CommandId $EventId -Payload $EventData
+          }
+          $EventType = ""
+          $EventId = ""
+          $EventData = ""
+        }
+      }
+    } catch {
+      Start-Sleep -Seconds 1
     }
-    if ($StatusCode -eq 410 -or $StatusCode -eq 401 -or $StatusCode -eq 404) {
-      if (Test-Path $BodyFile) { Get-Content $BodyFile -Raw | Write-Host }
-      Remove-Item $BodyFile, $ResultFile -Force
-      break
-    }
-    if ($StatusCode -ne 200) {
-      if (Test-Path $BodyFile) { Get-Content $BodyFile -Raw | Write-Host }
-      Remove-Item $BodyFile, $ResultFile -Force
-      Start-Sleep -Milliseconds 500
-      continue
-    }
-    $CommandId = [string]$Response.Headers["X-Command-Id"]
-    $CommandBody = Get-Content $BodyFile -Raw
-    Write-Host ""
-    Write-Host "> $CommandBody"
-    $ExitCode = Run-Command -CommandBody $CommandBody -ResultFile $ResultFile
-    if (Test-Path $ResultFile) { Get-Content $ResultFile -Raw | Write-Host }
-    Write-Host "[exit $ExitCode]"
-    Invoke-AgentRequest -Method Post -Path "/api/v1/$Code/result/$CommandId?exit=$ExitCode" -Body ([IO.File]::ReadAllBytes($ResultFile)) -ContentType "application/octet-stream" | Out-Null
-    Remove-Item $BodyFile, $ResultFile -Force
   }
 } finally {
   Send-Bye
+  $Client.Dispose()
 }
 `;
 }
