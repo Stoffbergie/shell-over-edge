@@ -20,7 +20,6 @@ const requiredFiles = [
   ".github/workflows/dependency-review.yml",
   ".github/workflows/labeler.yml",
   ".github/workflows/release.yml",
-  "docs/assets/shell-over-edge-demo.gif",
   "LICENSE",
   "llms.txt",
   "pnpm-workspace.yaml",
@@ -72,7 +71,7 @@ async function main() {
   const pkg = JSON.parse(await readText(join(root, "package.json")));
   if (pkg.name !== "soe") failures.push("package.json name must be soe");
   if (pkg.private !== false) failures.push("package.json private must be false");
-  if (pkg.description !== "Temporary shell access through Cloudflare Workers.") failures.push("package.json description is wrong");
+  if (pkg.description !== "Reach any shell from anywhere.") failures.push("package.json description is wrong");
   if (pkg.homepage !== "https://soe.stoff.dev") failures.push("package.json homepage must be https://soe.stoff.dev");
   if (pkg.repository?.url !== "https://github.com/Stoffberg/shell-over-edge.git") failures.push("package.json repository URL is wrong");
   if (pkg.scripts?.test !== "vitest run") failures.push("package.json test script must use Vitest");
@@ -86,8 +85,8 @@ async function main() {
 
   const readme = await readText(join(root, "README.md"));
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
-  if (!readme.includes("Temporary shell access through Cloudflare Workers.")) failures.push("README one-liner is wrong");
-  if (!readme.includes("docs/assets/shell-over-edge-demo.gif")) failures.push("README must link the split-screen demo");
+  if (!readme.includes("Reach any shell from anywhere.")) failures.push("README one-liner is wrong");
+  if (!readme.includes("```mermaid")) failures.push("README must include a Mermaid flow diagram");
   if (!readme.includes("llms.txt")) failures.push("README must link llms.txt");
   if (!readme.includes("skills/shell-over-edge/SKILL.md")) failures.push("README must link the Shell Over Edge skill");
   if (readme.includes("Authorization: Bearer")) failures.push("README must not document retired bearer-token API");
