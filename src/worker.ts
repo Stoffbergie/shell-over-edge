@@ -81,6 +81,7 @@ const maxFileBytes = 1024 * 1024;
 const maxResultBytes = 1024 * 1024;
 const maxCommandBytes = 64 * 1024;
 const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
 
 class PayloadTooLargeError extends Error {
   constructor(readonly maxBytes: number) {
@@ -223,6 +224,7 @@ app.onError((error) => {
 
 app.use("*", async (c, next) => {
   await next();
+  if (c.res.headers.get("Cache-Control") === "no-store") return;
   const headers = new Headers(c.res.headers);
   headers.set("Cache-Control", "no-store");
   c.res = new Response(c.res.body, {
@@ -815,7 +817,7 @@ async function readJson<T>(request: Request, maxBytes = maxCommandBytes): Promis
   const bytes = await request.arrayBuffer();
   if (bytes.byteLength > maxBytes) throw new PayloadTooLargeError(maxBytes);
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+    return JSON.parse(textDecoder.decode(bytes)) as T;
   } catch {
     throw new BadRequestError("Invalid JSON");
   }
@@ -824,7 +826,7 @@ async function readJson<T>(request: Request, maxBytes = maxCommandBytes): Promis
 async function readLimitedText(request: Request, maxBytes: number): Promise<string> {
   const bytes = await request.arrayBuffer();
   if (bytes.byteLength > maxBytes) throw new PayloadTooLargeError(maxBytes);
-  return new TextDecoder().decode(bytes);
+  return textDecoder.decode(bytes);
 }
 
 async function sha256(value: string): Promise<string> {
