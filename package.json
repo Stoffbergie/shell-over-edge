@@ -7,15 +7,19 @@
     }
   },
   "type": "module",
-  "name": "remote-stoff-dev",
+  "name": "soe",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "scripts": {
     "dev": "wrangler dev --ip 0.0.0.0 --port 8787",
     "build": "pnpm run typecheck",
     "typecheck": "tsc --noEmit",
-    "deploy": "pnpm run build && wrangler deploy",
-    "check": "pnpm run build"
+    "deploy": "pnpm run check && wrangler deploy",
+    "check": "pnpm run typecheck && pnpm run repo:audit",
+    "validate": "pnpm run check && pnpm run dry-run",
+    "dry-run": "wrangler deploy --dry-run",
+    "repo:audit": "node scripts/repo-audit.mjs",
+    "smoke:prod": "node scripts/smoke-prod.mjs"
   },
   "packageManager": "pnpm@11.5.2",
   "dependencies": {
@@ -25,5 +29,14 @@
     "@cloudflare/workers-types": "^4.20260608.1",
     "typescript": "^6.0.3",
     "wrangler": "^4.98.0"
-  }
+  },
+  "homepage": "https://soe.stoff.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Stoffberg/soe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Stoffberg/soe/issues"
+  },
+  "license": "MIT"
 }

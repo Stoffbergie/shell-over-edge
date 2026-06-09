@@ -1,0 +1,16 @@
+github_actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+
+worker:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**"
+          - "wrangler.toml"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "pnpm-lock.yaml"

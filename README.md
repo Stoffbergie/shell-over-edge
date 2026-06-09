@@ -1,50 +1,117 @@
-# remote.stoff.dev
+# soe
 
-Terminal-to-terminal remote command runner.
+[![CI](https://github.com/Stoffberg/soe/actions/workflows/ci.yml/badge.svg)](https://github.com/Stoffberg/soe/actions/workflows/ci.yml)
+[![Deploy](https://github.com/Stoffberg/soe/actions/workflows/deploy.yml/badge.svg)](https://github.com/Stoffberg/soe/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Friend Side
+Temporary remote support over a Cloudflare Worker.
 
-macOS or Linux:
+Production: [https://soe.stoff.dev](https://soe.stoff.dev)
 
-```sh
-curl -fsSL https://remote.stoff.dev/connect.sh | sh
-```
+## How It Works
 
-Windows PowerShell:
+Create a session, send the generated command to the remote machine, then queue shell commands or file transfers through the session API. Sessions expire after two hours.
 
-```powershell
-irm "https://remote.stoff.dev/connect.ps1" | iex
-```
-
-Windows Command Prompt:
-
-```bat
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://remote.stoff.dev/connect.ps1' | iex"
-```
-
-The command prints a UUID and copies it to the clipboard when possible. The friend sends you that UUID and leaves the terminal open. They will see each command and its output as it runs.
-
-## Helper Side
-
-Run one command at a time:
+## Start A Session
 
 ```sh
-curl -sS https://remote.stoff.dev -H "x-api-key: <uuid>" --data-binary "pwd"
+curl -sS -X POST https://soe.stoff.dev/api/sessions \
+  -H "Content-Type: application/json" \
+  --data '{"helperName":"Dirk"}'
 ```
 
-Good first test commands:
+The response includes:
+
+- `shellCommand`: run on macOS or Linux
+- `windowsCommand`: run in PowerShell
+- `helperToken`: use this from the helper side
+- `agentToken`: embedded in the generated remote-side script
+
+Tokens are sent through `Authorization: Bearer` headers, not URL query strings.
+
+## Queue A Command
 
 ```sh
-curl -sS https://remote.stoff.dev -H "x-api-key: <uuid>" --data-binary "hostname"
-curl -sS https://remote.stoff.dev -H "x-api-key: <uuid>" --data-binary "whoami"
-curl -sS https://remote.stoff.dev -H "x-api-key: <uuid>" --data-binary "pwd"
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<session-id>/commands \
+  -H "Authorization: Bearer <helper-token>" \
+  -H "Content-Type: application/json" \
+  --data '{"body":"pwd"}'
 ```
 
-For a Windows target, PowerShell commands also work:
+Read events:
 
 ```sh
-curl -sS https://remote.stoff.dev -H "x-api-key: <uuid>" --data-binary "Get-Location"
-curl -sS https://remote.stoff.dev -H "x-api-key: <uuid>" --data-binary '$env:USERNAME'
+curl -sS https://soe.stoff.dev/api/sessions/<session-id>/events \
+  -H "Authorization: Bearer <helper-token>"
 ```
 
-Stop the session with `Ctrl+C` in the friend-side terminal.
+End the session:
+
+```sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<session-id>/end \
+  -H "Authorization: Bearer <helper-token>"
+```
+
+## File Transfer
+
+Upload a file to the remote machine:
+
+```sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<session-id>/upload \
+  -H "Authorization: Bearer <helper-token>" \
+  -F "path=/tmp/example.txt" \
+  -F "file=@./example.txt"
+```
+
+Read a file back:
+
+```sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<session-id>/download \
+  -H "Authorization: Bearer <helper-token>" \
+  -H "Content-Type: application/json" \
+  --data '{"path":"/tmp/example.txt"}'
+```
+
+Then fetch `/api/sessions/<session-id>/downloads/<download-id>` with the same helper token.
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Session TTL | 2 hours |
+| Cleanup retention | 24 hours after expiry |
+| Command body | 64 KB |
+| Result body | 1 MB |
+| File upload/download | 1 MB |
+| Timeout | 1 to 3600 seconds |
+
+## Local Development
+
+```sh
+pnpm install
+pnpm run dev
+```
+
+## Validation
+
+```sh
+pnpm run check
+pnpm run dry-run
+pnpm run smoke:prod
+```
+
+`pnpm run validate` runs the local check chain plus a Wrangler dry run.
+
+## Cloudflare
+
+Required bindings:
+
+- R2 bucket: `SOE_MAILBOX`
+- Durable Object namespace: `COMMAND_BRIDGES`
+- Custom domain: `soe.stoff.dev`
+- Optional legacy flag: `ENABLE_LEGACY_BRIDGE=true`
+
+GitHub deploys need these repository secrets:
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
