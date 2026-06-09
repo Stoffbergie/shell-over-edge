@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
-import { appendEvent, cleanupExpiredSessions, codeKey, commandKey, enqueueCommand, getJson, listEvents, metaKey, nextQueuedCommand, putJson } from "../../.tmp/test-build/src/session-store.js";
+import { appendEvent, cleanupExpiredSessions, commandKey, enqueueCommand, getJson, listEvents, metaKey, nextQueuedCommand, putJson } from "../../.tmp/test-build/src/session-store.js";
 import { createTestEnv } from "../helpers/fake-env.mjs";
 
 test("queues commands in order and skips stale queue entries", async () => {
@@ -53,8 +53,6 @@ test("cleanup expires old active sessions and deletes retained data", async () =
     id: "sess_expiring",
     code: "BR-EXPIR",
     helperName: "Ada",
-    helperTokenHash: "helper",
-    agentTokenHash: "agent",
     status: "waiting",
     createdAt: now - 10_000,
     expiresAt: now - 1
@@ -67,14 +65,12 @@ test("cleanup expires old active sessions and deletes retained data", async () =
   };
 
   await putJson(env, metaKey(expiring.id), expiring);
-  await putJson(env, codeKey(expiring.code), { id: expiring.id, code: expiring.code, createdAt: expiring.createdAt, expiresAt: expiring.expiresAt });
   await putJson(env, metaKey(retained.id), retained);
-  await putJson(env, codeKey(retained.code), { id: retained.id, code: retained.code, createdAt: retained.createdAt, expiresAt: retained.expiresAt });
   await putJson(env, `sessions/${retained.id}/commands/cmd.json`, { ok: true });
 
   await cleanupExpiredSessions(env);
 
   assert.equal((await getJson(env, metaKey(expiring.id))).status, "expired");
   assert.equal(await mailbox.get(metaKey(retained.id)), null);
-  assert.equal(await mailbox.get(codeKey(retained.code)), null);
+  assert.equal(await mailbox.get(`sessions/${retained.id}/commands/cmd.json`), null);
 });

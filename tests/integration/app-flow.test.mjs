@@ -1,190 +1,131 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { app } from "../../.tmp/test-build/src/app.js";
-import { auth, createSession, createTestEnv, json, text } from "../helpers/fake-env.mjs";
+import { createSession, createTestEnv, text } from "../helpers/fake-env.mjs";
 
 console.info = () => {};
 
-const legacyCode = ["550e8400", "e29b", "41d4", "a716", "446655440000"].join("-");
+test("session creation returns plain scripts keyed by a uuid capability", async () => {
+  const fixture = createTestEnv();
+  const shell = await createSession(app, fixture);
+  assert.equal(shell.contentType, "text/x-shellscript; charset=utf-8");
+  assert.equal(shell.code, shell.id);
+  assert.ok(shell.script.startsWith("#!/bin/sh"));
+  assert.ok(shell.script.includes(`SESSION_ID='${shell.id}'`));
+  assert.ok(shell.script.includes(`/api/sessions/$SESSION_ID/next`));
+  assert.ok(shell.script.includes("/api/sessions/%s/send"));
+  assert.ok(shell.script.includes("copy_text()"));
+  assert.ok(!shell.script.includes("Authorization: Bearer"));
+  assert.ok(!shell.script.includes("?token" + "="));
 
-test("helper and agent can complete a shell command round trip", async () => {
+  const powerShell = await createSession(app, fixture, "/api/sessions.ps1");
+  assert.equal(powerShell.contentType, "text/plain; charset=utf-8");
+  assert.ok(powerShell.script.includes(`$SessionId = "${powerShell.id}"`));
+  assert.ok(powerShell.script.includes("/api/sessions/$SessionId/next"));
+  assert.ok(powerShell.script.includes("Set-Clipboard"));
+  assert.ok(!powerShell.script.includes("Authorization"));
+  assert.ok(!powerShell.script.includes("?token" + "="));
+});
+
+test("send waits for the agent result and returns plain command output", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);
 
-  assert.equal(session.status, "waiting");
-  assert.match(session.id, /^sess_/);
-  assert.match(session.code, /^BR-/);
-  assert.ok(session.shellCommand.includes("https://soe.test/start/"));
-  assert.ok(session.windowsCommand.includes("https://soe.test/start/"));
-  assert.ok(!session.shellCommand.includes("?token" + "="));
-  assert.ok(!session.windowsCommand.includes("?token" + "="));
-
-  const unauthorized = await app.request(`/api/sessions/${session.id}`, {}, fixture.env, fixture.ctx);
-  assert.equal(unauthorized.status, 401);
-
-  const hello = await app.request(`/api/agent/${session.code}/hello`, {
+  const hello = await app.request(`/api/sessions/${session.id}/hello`, {
     method: "POST",
-    headers: { ...auth(session.agentToken), "Content-Type": "application/json" },
-    body: JSON.stringify({ platform: "linux", user: "runner", cwd: "/tmp" })
+    headers: {
+      "X-Agent-Platform": "linux",
+      "X-Agent-User": "runner"
+    },
+    body: "/tmp"
   }, fixture.env, fixture.ctx);
   assert.equal(hello.status, 200);
-  assert.equal((await json(hello)).status, "connected");
+  assert.equal(await text(hello), "connected\n");
 
-  const queued = await app.request(`/api/sessions/${session.id}/commands`, {
+  const sendJson = app.request(`/api/sessions/${session.id}/send`, {
     method: "POST",
-    headers: { ...auth(session.helperToken), "Content-Type": "application/json" },
-    body: JSON.stringify({ body: "pwd", cwd: "/tmp", timeoutSeconds: 12 })
+    body: '{"body":"pwd","cwd":"/tmp","timeoutSeconds":12}'
   }, fixture.env, fixture.ctx);
-  assert.equal(queued.status, 200);
-  const { commandId } = await json(queued);
 
-  const next = await app.request(`/api/agent/${session.code}/next`, {
-    headers: auth(session.agentToken)
-  }, fixture.env, fixture.ctx);
-  assert.equal(next.status, 200);
-  assert.equal(next.headers.get("X-Command-Id"), commandId);
-  assert.equal(next.headers.get("X-Command-Type"), "shell");
-  assert.equal(next.headers.get("X-Command-Timeout"), "12");
-  assert.equal(Buffer.from(next.headers.get("X-Command-Cwd-Base64"), "base64").toString("utf8"), "/tmp");
-  assert.equal(await text(next), "pwd");
+  const nextJson = await waitForNext(session.id, fixture);
+  assert.equal(nextJson.headers.get("X-Command-Type"), "shell");
+  assert.equal(nextJson.headers.get("X-Command-Timeout"), "12");
+  assert.equal(Buffer.from(nextJson.headers.get("X-Command-Cwd-Base64"), "base64").toString("utf8"), "/tmp");
+  assert.equal(await text(nextJson), "pwd");
 
-  const result = await app.request(`/api/agent/${session.code}/result/${commandId}?exit=0`, {
+  const resultJson = await app.request(`/api/sessions/${session.id}/result/${nextJson.headers.get("X-Command-Id")}?exit=0`, {
     method: "POST",
-    headers: auth(session.agentToken),
     body: "ok\n"
   }, fixture.env, fixture.ctx);
-  assert.equal(result.status, 200);
+  assert.equal(resultJson.status, 200);
 
-  const events = await app.request(`/api/sessions/${session.id}/events`, {
-    headers: auth(session.helperToken)
-  }, fixture.env, fixture.ctx);
-  const eventPayload = await json(events);
-  assert.equal(eventPayload.status, "connected");
-  assert.ok(eventPayload.events.some((event) => event.type === "command_result" && event.output === "ok\n"));
+  const sentJson = await sendJson;
+  assert.equal(sentJson.status, 200);
+  assert.equal(sentJson.headers.get("X-Exit-Code"), "0");
+  assert.equal(await text(sentJson), "ok\n");
 
-  const end = await app.request(`/api/sessions/${session.id}/end`, {
+  const sendRaw = app.request(`/api/sessions/${session.id}/send?timeout=3`, {
     method: "POST",
-    headers: auth(session.helperToken)
+    body: "whoami"
   }, fixture.env, fixture.ctx);
+  const nextRaw = await waitForNext(session.id, fixture);
+  assert.equal(nextRaw.headers.get("X-Command-Timeout"), "3");
+  assert.equal(await text(nextRaw), "whoami");
+
+  const resultRaw = await app.request(`/api/sessions/${session.id}/result/${nextRaw.headers.get("X-Command-Id")}?exit=7`, {
+    method: "POST",
+    body: "nope\n"
+  }, fixture.env, fixture.ctx);
+  assert.equal(resultRaw.status, 200);
+
+  const sentRaw = await sendRaw;
+  assert.equal(sentRaw.status, 500);
+  assert.equal(sentRaw.headers.get("X-Exit-Code"), "7");
+  assert.equal(await text(sentRaw), "nope\n");
+});
+
+test("invalid sessions, bad send payloads, and retired routes return text errors", async () => {
+  const fixture = createTestEnv();
+  const session = await createSession(app, fixture);
+
+  const invalidPayload = await app.request(`/api/sessions/${session.id}/send`, {
+    method: "POST",
+    body: "{"
+  }, fixture.env, fixture.ctx);
+  assert.equal(invalidPayload.status, 400);
+  assert.equal(await text(invalidPayload), "Invalid JSON command payload\n");
+
+  const oldStart = await app.request(`/start/${session.id}.sh`, {}, fixture.env, fixture.ctx);
+  assert.equal(oldStart.status, 404);
+  assert.equal(await text(oldStart), "Not found\n");
+
+  assert.equal((await app.request(`/api/agent/${session.id}/next`, {}, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/api/sessions/${session.id}/commands`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/api/sessions/${session.id}/upload`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request("/connect.sh", {}, fixture.env, fixture.ctx)).status, 404);
+
+  const end = await app.request(`/api/sessions/${session.id}/end`, { method: "POST" }, fixture.env, fixture.ctx);
   assert.equal(end.status, 200);
-  assert.equal((await json(end)).status, "ended");
+  assert.equal(await text(end), "ended\n");
 
-  const blocked = await app.request(`/api/sessions/${session.id}/commands`, {
+  const blocked = await app.request(`/api/sessions/${session.id}/send`, {
     method: "POST",
-    headers: { ...auth(session.helperToken), "Content-Type": "application/json" },
-    body: JSON.stringify({ body: "whoami" })
+    body: "pwd"
   }, fixture.env, fixture.ctx);
   assert.equal(blocked.status, 410);
+  assert.equal(await text(blocked), "Session ended\n");
 });
 
-test("file upload and download flow preserves bytes and transfer headers", async () => {
-  const fixture = createTestEnv();
-  const session = await createSession(app, fixture);
-  const form = new FormData();
-  form.set("path", "/tmp/hello.txt");
-  form.set("file", new File(["hello"], "hello.txt", { type: "text/plain" }));
+async function waitForNext(sessionId, fixture) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await app.request(`/api/sessions/${sessionId}/next`, {}, fixture.env, fixture.ctx);
+    if (response.status === 200) return response;
+    assert.equal(response.status, 204);
+    await sleep(50);
+  }
+  throw new Error("Timed out waiting for queued command");
+}
 
-  const upload = await app.request(`/api/sessions/${session.id}/upload`, {
-    method: "POST",
-    headers: auth(session.helperToken),
-    body: form
-  }, fixture.env, fixture.ctx);
-  assert.equal(upload.status, 200);
-  const uploadPayload = await json(upload);
-
-  const writeCommand = await app.request(`/api/agent/${session.code}/next`, {
-    headers: auth(session.agentToken)
-  }, fixture.env, fixture.ctx);
-  assert.equal(writeCommand.status, 200);
-  assert.equal(writeCommand.headers.get("X-Command-Id"), uploadPayload.commandId);
-  assert.equal(writeCommand.headers.get("X-Command-Type"), "write-file");
-  assert.equal(Buffer.from(writeCommand.headers.get("X-Command-Path-Base64"), "base64").toString("utf8"), "/tmp/hello.txt");
-  assert.equal(Buffer.from(await writeCommand.arrayBuffer()).toString("utf8"), "hello");
-
-  const writeResult = await app.request(`/api/agent/${session.code}/result/${uploadPayload.commandId}?exit=0`, {
-    method: "POST",
-    headers: auth(session.agentToken),
-    body: "wrote"
-  }, fixture.env, fixture.ctx);
-  assert.equal(writeResult.status, 200);
-
-  const download = await app.request(`/api/sessions/${session.id}/download`, {
-    method: "POST",
-    headers: { ...auth(session.helperToken), "Content-Type": "application/json" },
-    body: JSON.stringify({ path: "/tmp/hello.txt" })
-  }, fixture.env, fixture.ctx);
-  assert.equal(download.status, 200);
-  const downloadPayload = await json(download);
-
-  const readCommand = await app.request(`/api/agent/${session.code}/next`, {
-    headers: auth(session.agentToken)
-  }, fixture.env, fixture.ctx);
-  assert.equal(readCommand.headers.get("X-Command-Type"), "read-file");
-  assert.equal(readCommand.headers.get("X-Download-Id"), downloadPayload.downloadId);
-  assert.equal(Buffer.from(readCommand.headers.get("X-Command-Path-Base64"), "base64").toString("utf8"), "/tmp/hello.txt");
-
-  const readResult = await app.request(`/api/agent/${session.code}/result/${readCommand.headers.get("X-Command-Id")}?exit=0`, {
-    method: "POST",
-    headers: auth(session.agentToken),
-    body: "download bytes"
-  }, fixture.env, fixture.ctx);
-  assert.equal(readResult.status, 200);
-
-  const file = await app.request(`/api/sessions/${session.id}/downloads/${downloadPayload.downloadId}`, {
-    headers: auth(session.helperToken)
-  }, fixture.env, fixture.ctx);
-  assert.equal(file.status, 200);
-  assert.equal(file.headers.get("Content-Disposition"), 'attachment; filename="hello.txt"');
-  assert.equal(await text(file), "download bytes");
-});
-
-test("start scripts require bearer token and never accept URL tokens", async () => {
-  const fixture = createTestEnv();
-  const session = await createSession(app, fixture);
-
-  const missing = await app.request(`/start/${session.code}.sh`, {}, fixture.env, fixture.ctx);
-  assert.equal(missing.status, 400);
-
-  const bad = await app.request(`/start/${session.code}.sh`, {
-    headers: auth(["wrong", "value"].join("-"))
-  }, fixture.env, fixture.ctx);
-  assert.equal(bad.status, 401);
-
-  const shell = await app.request(`/start/${session.code}.sh?token${"="}${session.agentToken}`, {}, fixture.env, fixture.ctx);
-  assert.equal(shell.status, 400);
-
-  const goodShell = await app.request(`/start/${session.code}.sh`, {
-    headers: auth(session.agentToken)
-  }, fixture.env, fixture.ctx);
-  assert.equal(goodShell.status, 200);
-  assert.match(await text(goodShell), /Authorization: Bearer \$TOKEN/);
-
-  const goodPowerShell = await app.request(`/start/${session.code}.ps1`, {
-    headers: auth(session.agentToken)
-  }, fixture.env, fixture.ctx);
-  assert.equal(goodPowerShell.status, 200);
-  assert.match(await text(goodPowerShell), /\$Headers = @\{ Authorization = "Bearer \$Token" \}/);
-});
-
-test("legacy bridge stays disabled by default and forwards only when explicitly enabled", async () => {
-  const disabled = createTestEnv();
-  assert.equal((await app.request("/connect.sh", {}, disabled.env, disabled.ctx)).status, 404);
-  assert.equal((await app.request(`/api/v1/${legacyCode}/events`, {}, disabled.env, disabled.ctx)).status, 404);
-
-  const calls = [];
-  const enabled = createTestEnv({
-    legacyBridge: true,
-    bridgeFetch: (id, request, init) => {
-      calls.push({ id, request: String(request), init });
-      return new Response("forwarded", { status: 202 });
-    }
-  });
-  const code = legacyCode;
-  const response = await app.request(`/api/v1/${code}/bye`, {
-    method: "POST",
-    headers: { "x-api-key": code }
-  }, enabled.env, enabled.ctx);
-  assert.equal(response.status, 202);
-  assert.equal(calls[0].id, code);
-  assert.equal(calls[0].request, "https://bridge/bye");
-});
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

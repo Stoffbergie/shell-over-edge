@@ -1,7 +1,6 @@
 import { cleanupRetentionMs } from "./config";
-import { base64Encode, randomCode, randomId } from "./crypto";
-import { jsonResponse } from "./http";
-import type { CodeIndex, CommandRecord, Env, EventRecord, SessionMeta } from "./types";
+import { base64Encode, randomId } from "./crypto";
+import type { CommandRecord, Env, EventRecord, SessionMeta } from "./types";
 
 export async function expireIfNeeded(env: Env, meta: SessionMeta): Promise<SessionMeta> {
   if (Date.now() < meta.expiresAt || meta.status === "ended" || meta.status === "expired") return meta;
@@ -15,21 +14,6 @@ export async function expireIfNeeded(env: Env, meta: SessionMeta): Promise<Sessi
     });
   }
   return expired;
-}
-
-export async function createUniqueCode(env: Env): Promise<string> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const code = randomCode();
-    const existing = await getJson<CodeIndex>(env, codeKey(code));
-    if (!existing) return code;
-  }
-  throw new Error("Could not allocate session code");
-}
-
-export async function getSessionByCode(env: Env, code: string): Promise<SessionMeta | null> {
-  const index = await getJson<CodeIndex>(env, codeKey(code));
-  if (!index) return null;
-  return getJson<SessionMeta>(env, metaKey(index.id));
 }
 
 export async function enqueueCommand(env: Env, sessionId: string, input: Omit<CommandRecord, "id" | "status" | "createdAt">): Promise<CommandRecord> {
@@ -66,16 +50,8 @@ export async function nextQueuedCommand(env: Env, sessionId: string): Promise<Co
   return null;
 }
 
-export async function commandResponse(env: Env, command: CommandRecord): Promise<Response> {
+export async function commandResponse(command: CommandRecord): Promise<Response> {
   const headers = commandHeaders(command);
-  if (command.type === "write-file") {
-    const object = command.uploadKey ? await env.SOE_MAILBOX.get(command.uploadKey) : null;
-    if (!object) return jsonResponse({ error: "Upload not found" }, 404);
-    return new Response(object.body, { status: 200, headers });
-  }
-  if (command.type === "read-file") {
-    return new Response("", { status: 200, headers });
-  }
   return new Response(command.body || "", { status: 200, headers });
 }
 
@@ -88,9 +64,6 @@ function commandHeaders(command: CommandRecord): Headers {
     "X-Command-Timeout": String(command.timeoutSeconds)
   });
   if (command.cwd) headers.set("X-Command-Cwd-Base64", base64Encode(command.cwd));
-  if (command.path) headers.set("X-Command-Path-Base64", base64Encode(command.path));
-  if (command.uploadName) headers.set("X-Command-Upload-Name-Base64", base64Encode(command.uploadName));
-  if (command.downloadId) headers.set("X-Download-Id", command.downloadId);
   return headers;
 }
 
@@ -134,7 +107,6 @@ export async function cleanupExpiredSessions(env: Env): Promise<void> {
     }
     if (now >= meta.expiresAt + cleanupRetentionMs) {
       await deletePrefix(env, `sessions/${meta.id}/`);
-      await env.SOE_MAILBOX.delete(codeKey(meta.code));
     }
   }
 }
@@ -180,10 +152,6 @@ export function metaKey(id: string): string {
   return `sessions/${id}/meta.json`;
 }
 
-export function codeKey(code: string): string {
-  return `sessions/by-code/${code}.json`;
-}
-
 export function commandKey(sessionId: string, commandId: string): string {
   return `sessions/${sessionId}/commands/${commandId}.json`;
 }
@@ -198,8 +166,4 @@ function eventKey(sessionId: string, eventId: string): string {
 
 function eventIndexKey(sessionId: string): string {
   return `sessions/${sessionId}/event-index.json`;
-}
-
-export function downloadKey(sessionId: string, downloadId: string): string {
-  return `sessions/${sessionId}/downloads/${downloadId}`;
 }

@@ -36,7 +36,8 @@ function requestText(url, init) {
         resolve({
           response: {
             ok: status >= 200 && status < 300,
-            status
+            status,
+            headers: response.headers
           },
           text: Buffer.concat(chunks).toString("utf8")
         });
@@ -83,41 +84,48 @@ function assert(condition, message) {
 const root = await request("/");
 assert(root.response.ok, `GET / returned ${root.response.status}`);
 assert(root.text.includes("Shell Over Edge"), "GET / did not return Shell Over Edge usage");
+assert(root.text.includes("/api/sessions/<uuid>/send"), "GET / did not return simplified send usage");
 
 const legacy = await request("/connect.sh");
 assert(legacy.response.status === 404, `legacy connect.sh should be disabled, got ${legacy.response.status}`);
 
 const session = await request("/api/sessions", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ helperName: "smoke" })
+  method: "POST"
 });
 assert(session.response.ok, `POST /api/sessions returned ${session.response.status}: ${session.text}`);
 
-const payload = JSON.parse(session.text);
-assert(typeof payload.id === "string" && payload.id.startsWith("sess_"), "session id missing");
-assert(typeof payload.code === "string" && payload.code.startsWith("BR-"), "session code missing");
-assert(typeof payload.helperToken === "string" && payload.helperToken.length >= 32, "helper token missing");
-assert(typeof payload.agentToken === "string" && payload.agentToken.length >= 32, "agent token missing");
-assert(payload.shellCommand.includes("https://soe.stoff.dev/start/"), "shell command points at the wrong host");
-assert(!payload.shellCommand.includes("?token" + "="), "shell command leaks token in URL");
-assert(payload.windowsCommand.includes("https://soe.stoff.dev/start/"), "windows command points at the wrong host");
-assert(!payload.windowsCommand.includes("?token" + "="), "windows command leaks token in URL");
+const id = session.response.headers["x-session-id"];
+assert(isUuidV4(id), "session id header missing");
+assert(session.text.startsWith("#!/bin/sh"), "session response is not a shell script");
+assert(session.text.includes(`/api/sessions/$SESSION_ID/next`), "shell script does not poll the simplified session route");
+assert(!session.text.includes("Authorization"), "shell script should not use authorization headers");
+assert(!session.text.includes("?token" + "="), "shell script leaks token in URL");
 
-const unauthorized = await request(`/api/sessions/${payload.id}`);
-assert(unauthorized.response.status === 401, `unauthorized session read should be 401, got ${unauthorized.response.status}`);
-
-const authed = await request(`/api/sessions/${payload.id}`, {
-  headers: { Authorization: `Bearer ${payload.helperToken}` }
+const powerShell = await request("/api/sessions.ps1", {
+  method: "POST"
 });
-assert(authed.response.ok, `authorized session read returned ${authed.response.status}: ${authed.text}`);
+assert(powerShell.response.ok, `POST /api/sessions.ps1 returned ${powerShell.response.status}: ${powerShell.text}`);
+const powerShellId = powerShell.response.headers["x-session-id"];
+assert(isUuidV4(powerShellId), "PowerShell session id header missing");
+assert(powerShell.text.includes(`$SessionId = "${powerShellId}"`), "PowerShell script does not embed its session id");
+assert(powerShell.text.includes("/api/sessions/$SessionId/next"), "PowerShell script does not poll the simplified session route");
+assert(!powerShell.text.includes("Authorization"), "PowerShell script should not use authorization headers");
 
-const ended = await request(`/api/sessions/${payload.id}/end`, {
-  method: "POST",
-  headers: { Authorization: `Bearer ${payload.helperToken}` }
+const ended = await request(`/api/sessions/${id}/end`, {
+  method: "POST"
 });
 assert(ended.response.ok, `session end returned ${ended.response.status}: ${ended.text}`);
-const endedPayload = JSON.parse(ended.text);
-assert(endedPayload.ok === true && endedPayload.status === "ended", "session end payload is wrong");
+assert(ended.text === "ended\n", "session end payload is wrong");
+
+const blocked = await request(`/api/sessions/${id}/send`, {
+  method: "POST",
+  body: "pwd"
+});
+assert(blocked.response.status === 410, `ended session send should be 410, got ${blocked.response.status}`);
+assert(blocked.text === "Session ended\n", "ended session send payload is wrong");
+
+function isUuidV4(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value || "");
+}
 
 console.log(`production smoke passed for ${baseUrl}`);
