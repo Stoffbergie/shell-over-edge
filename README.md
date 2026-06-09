@@ -248,12 +248,12 @@ Reference run from this machine to `https://soe.stoff.dev` on June 10, 2026:
 
 | Metric | p50 | p95 |
 | --- | ---: | ---: |
-| `GET /` | 11.7 ms | 37.7 ms |
-| `GET /a` | 12.9 ms | 44.3 ms |
-| `POST /api/sessions` | 932.8 ms | 994.1 ms |
-| relay command round trip | 1081.7 ms | 1155.5 ms |
+| `GET /` | 12.4 ms | 96.1 ms |
+| `GET /a` | 13.4 ms | 30.3 ms |
+| `POST /api/sessions` | 893.8 ms | 1077.6 ms |
+| relay command round trip | 941.5 ms | 1462.8 ms |
 
-The same run processed 32 queued relay commands in 10066.4 ms from a single agent loop. Response sizes were 362 bytes for `/`, 2523 bytes for `/a`, 2741 bytes for `/a.ps1`, and 3532 bytes for a generated POSIX relay agent.
+The same run processed 32 queued relay commands in 7614.6 ms from a single agent loop. Response sizes were 362 bytes for `/`, 2639 bytes for `/a`, 2843 bytes for `/a.ps1`, and 3532 bytes for a generated POSIX relay agent.
 
 ## Cloudflare
 
