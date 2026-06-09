@@ -7,7 +7,6 @@ set -u
 BASE_URL=${quoteShell(baseUrl)}
 SESSION_ID=${quoteShell(meta.id)}
 EXPIRES=${quoteShell(new Date(meta.expiresAt).toISOString())}
-POLL_SECONDS=2
 
 copy_text() {
   if command -v pbcopy >/dev/null 2>&1; then
@@ -27,7 +26,7 @@ copy_text() {
 
 decode_b64() {
   if command -v base64 >/dev/null 2>&1; then
-    printf '%s' "$1" | base64 --decode 2>/dev/null || printf '%s' "$1" | base64 -D 2>/dev/null || printf ''
+    printf '%s' "$1" | base64 -d 2>/dev/null || printf '%s' "$1" | base64 -D 2>/dev/null || printf ''
   else
     printf ''
   fi
@@ -51,14 +50,12 @@ run_shell() {
       printf 'Working directory does not exist: %s\\n' "$cwd" > "$output_file"
       return 1
     fi
-    run_prefix="cd $(printf '%s' "$cwd" | sed "s/'/'\\\\''/g; s/^/'/; s/$/'/") && "
-  else
-    run_prefix=""
+    cd "$cwd" || return 1
   fi
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$timeout_seconds" sh -c "$run_prefix$command_body" > "$output_file" 2>&1
+    timeout "$timeout_seconds" sh -c "$command_body" > "$output_file" 2>&1
   else
-    sh -c "$run_prefix$command_body" > "$output_file" 2>&1
+    sh -c "$command_body" > "$output_file" 2>&1
   fi
 }
 
@@ -78,7 +75,6 @@ while true; do
   status_code=$(curl -sS -D "$headers_file" -o "$body_file" -w "%{http_code}" "$BASE_URL/api/sessions/$SESSION_ID/next" || printf '000')
   if [ "$status_code" = "204" ]; then
     rm -f "$headers_file" "$body_file"
-    sleep "$POLL_SECONDS"
     continue
   fi
   if [ "$status_code" = "410" ] || [ "$status_code" = "404" ] || [ "$status_code" = "401" ]; then
@@ -91,23 +87,17 @@ while true; do
     cat "$body_file"
     printf '\\n'
     rm -f "$headers_file" "$body_file"
-    sleep "$POLL_SECONDS"
+    sleep 1
     continue
   fi
   command_id=$(header_value X-Command-Id "$headers_file")
-  command_type=$(header_value X-Command-Type "$headers_file")
   cwd=$(decode_b64 "$(header_value X-Command-Cwd-Base64 "$headers_file")")
   timeout_seconds=$(header_value X-Command-Timeout "$headers_file")
   [ -n "$timeout_seconds" ] || timeout_seconds=900
   result_file=$(mktemp)
-  if [ "$command_type" = "shell" ]; then
-    command_body=$(cat "$body_file")
-    run_shell "$command_body" "$cwd" "$timeout_seconds" "$result_file"
-    exit_code=$?
-  else
-    printf 'Unknown command type: %s\\n' "$command_type" > "$result_file"
-    exit_code=1
-  fi
+  command_body=$(cat "$body_file")
+  (run_shell "$command_body" "$cwd" "$timeout_seconds" "$result_file")
+  exit_code=$?
   curl -fsS -X POST --data-binary "@$result_file" "$BASE_URL/api/sessions/$SESSION_ID/result/$command_id?exit=$exit_code" >/dev/null || true
   rm -f "$headers_file" "$body_file" "$result_file"
 done

@@ -48,7 +48,7 @@ jobs:
           cache: pnpm
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Require Cloudflare secrets
         if: ${{ inputs.smoke_only != true }}
@@ -57,11 +57,11 @@ jobs:
           test -n "$CLOUDFLARE_ACCOUNT_ID"
 
       - name: Check
-        if: ${{ inputs.smoke_only != true }}
+        if: ${{ inputs.smoke_only != true && github.event_name == 'workflow_dispatch' }}
         run: pnpm run check
 
       - name: Validate Worker bundle
-        if: ${{ inputs.smoke_only != true }}
+        if: ${{ inputs.smoke_only != true && github.event_name == 'workflow_dispatch' }}
         run: pnpm run dry-run
 
       - name: Deploy

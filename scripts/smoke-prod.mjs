@@ -111,6 +111,42 @@ assert(powerShell.text.includes(`$SessionId = "${powerShellId}"`), "PowerShell s
 assert(powerShell.text.includes("/api/sessions/$SessionId/next"), "PowerShell script does not poll the simplified session route");
 assert(!powerShell.text.includes("Authorization"), "PowerShell script should not use authorization headers");
 
+const powerShellEnd = await request(`/api/sessions/${powerShellId}/end`, {
+  method: "POST"
+});
+assert(powerShellEnd.response.ok, `PowerShell session end returned ${powerShellEnd.response.status}: ${powerShellEnd.text}`);
+
+const hello = await request(`/api/sessions/${id}/hello`, {
+  method: "POST",
+  headers: {
+    "X-Agent-Platform": "smoke",
+    "X-Agent-User": "smoke"
+  },
+  body: process.cwd()
+});
+assert(hello.response.ok, `agent hello returned ${hello.response.status}: ${hello.text}`);
+
+const send = request(`/api/sessions/${id}/send`, {
+  method: "POST",
+  body: '{"body":"printf smoke-prod","timeoutSeconds":10}'
+});
+
+const next = await request(`/api/sessions/${id}/next`);
+assert(next.response.ok, `agent next returned ${next.response.status}: ${next.text}`);
+const commandId = next.response.headers["x-command-id"];
+assert(commandId, "agent next did not return a command id");
+assert(next.text === "printf smoke-prod", "agent next returned the wrong command body");
+
+const result = await request(`/api/sessions/${id}/result/${commandId}?exit=0`, {
+  method: "POST",
+  body: "smoke-prod"
+});
+assert(result.response.ok, `agent result returned ${result.response.status}: ${result.text}`);
+
+const sendResult = await send;
+assert(sendResult.response.ok, `send returned ${sendResult.response.status}: ${sendResult.text}`);
+assert(sendResult.text === "smoke-prod", "send returned the wrong command output");
+
 const ended = await request(`/api/sessions/${id}/end`, {
   method: "POST"
 });
