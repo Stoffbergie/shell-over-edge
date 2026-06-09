@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 const root = process.cwd();
-const ignoredDirs = new Set([".git", ".tmp", ".wrangler", "node_modules"]);
+const ignoredDirs = new Set([".git", ".tmp", ".wrangler", ".zig-cache", "dist", "node_modules", "zig-out"]);
 const banned = [
   "remote" + ".stoff.dev",
   "remote" + "-stoff-dev",
@@ -20,9 +20,13 @@ const requiredFiles = [
   ".github/workflows/dependency-review.yml",
   ".github/workflows/labeler.yml",
   ".github/workflows/release.yml",
+  ".gitattributes",
   "LICENSE",
+  "build.zig",
   "llms.txt",
+  "native/agent/main.zig",
   "pnpm-workspace.yaml",
+  "scripts/build-native-linux.mjs",
   "scripts/repo-audit.mjs",
   "scripts/smoke-prod.mjs",
   "skills/shell-over-edge/SKILL.md",
@@ -76,6 +80,10 @@ async function main() {
   if (pkg.repository?.url !== "https://github.com/Stoffberg/shell-over-edge.git") failures.push("package.json repository URL is wrong");
   if (pkg.scripts?.test !== "vitest run") failures.push("package.json test script must use Vitest");
   if (!pkg.scripts?.["test:load"]) failures.push("package.json missing test:load");
+  if (!pkg.scripts?.["test:native"]) failures.push("package.json missing test:native");
+  if (!pkg.scripts?.["test:containers"]) failures.push("package.json missing test:containers");
+  if (!pkg.scripts?.["native:build"]) failures.push("package.json missing native:build");
+  if (!pkg.scripts?.["native:build:linux"]) failures.push("package.json missing native:build:linux");
   if (!pkg.scripts?.["typecheck:test"]) failures.push("package.json missing typecheck:test");
   if (!pkg.devDependencies?.vitest) failures.push("package.json missing vitest");
 
@@ -88,8 +96,10 @@ async function main() {
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
   if (!readme.includes("Reach any shell from anywhere.")) failures.push("README one-liner is wrong");
   if (!readme.includes("```mermaid")) failures.push("README must include a Mermaid flow diagram");
-  if (!readme.includes("/api/sessions/<uuid>/signals")) failures.push("README must document direct signals");
-  if (!readme.includes("/api/sessions/<uuid>/ice")) failures.push("README must document ICE config");
+  if (!readme.includes("curl -sS https://soe.stoff.dev/a | sh")) failures.push("README must document POSIX bootstrap");
+  if (!readme.includes("/api/sessions/<code>/signals")) failures.push("README must document direct signals");
+  if (!readme.includes("/api/sessions/<code>/ice")) failures.push("README must document ICE config");
+  if (!readme.includes("agent/main.zig")) failures.push("README must document native agent layout");
   if (!readme.includes("Direct Transport")) failures.push("README must document the direct transport tradeoff");
   if (!readme.includes("llms.txt")) failures.push("README must link llms.txt");
   if (!readme.includes("skills/shell-over-edge/SKILL.md")) failures.push("README must link the Shell Over Edge skill");
@@ -98,18 +108,20 @@ async function main() {
   if (readme.includes("/direct-attempts")) failures.push("README must not document retired direct-attempts endpoint");
 
   const llms = await readText(join(root, "llms.txt"));
+  if (!llms.includes("GET /a")) failures.push("llms.txt must document POSIX bootstrap");
   if (!llms.includes("POST /api/sessions")) failures.push("llms.txt must document session creation");
-  if (!llms.includes("POST /api/sessions/<uuid>/send")) failures.push("llms.txt must document command send");
-  if (!llms.includes("POST /api/sessions/<uuid>/signals")) failures.push("llms.txt must document direct signals");
-  if (!llms.includes("GET /api/sessions/<uuid>/ice")) failures.push("llms.txt must document ICE config");
+  if (!llms.includes("POST /api/sessions/<code>/send")) failures.push("llms.txt must document command send");
+  if (!llms.includes("POST /api/sessions/<code>/signals")) failures.push("llms.txt must document direct signals");
+  if (!llms.includes("GET /api/sessions/<code>/ice")) failures.push("llms.txt must document ICE config");
   if (llms.includes("Authorization: Bearer")) failures.push("llms.txt must not document retired bearer-token API");
   if (llms.includes("/direct-attempts")) failures.push("llms.txt must not document retired direct-attempts endpoint");
 
   const skill = await readText(join(root, "skills/shell-over-edge/SKILL.md"));
   if (!skill.includes("name: shell-over-edge")) failures.push("Shell Over Edge skill missing name metadata");
-  if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<uuid>/send")) failures.push("Shell Over Edge skill must document command send");
-  if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<uuid>/signals")) failures.push("Shell Over Edge skill must document direct signals");
-  if (!skill.includes("GET https://soe.stoff.dev/api/sessions/<uuid>/ice")) failures.push("Shell Over Edge skill must document ICE config");
+  if (!skill.includes("GET https://soe.stoff.dev/a")) failures.push("Shell Over Edge skill must document POSIX bootstrap");
+  if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/send")) failures.push("Shell Over Edge skill must document command send");
+  if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/signals")) failures.push("Shell Over Edge skill must document direct signals");
+  if (!skill.includes("GET https://soe.stoff.dev/api/sessions/<code>/ice")) failures.push("Shell Over Edge skill must document ICE config");
   if (skill.includes("Authorization: Bearer")) failures.push("Shell Over Edge skill must not document retired bearer-token API");
   if (skill.includes("/direct-attempts")) failures.push("Shell Over Edge skill must not document retired direct-attempts endpoint");
 

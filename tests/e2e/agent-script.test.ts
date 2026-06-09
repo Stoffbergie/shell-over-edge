@@ -37,7 +37,42 @@ test.skipIf(!sh || !curl)("generated POSIX agent script connects, runs a command
     await waitForExit(agent, 10_000, output);
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
-    await rm(dir, { force: true, recursive: true });
+    await rm(dir, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
+    await server.close();
+  }
+});
+
+test.skipIf(!sh || !curl)("POSIX bootstrap starts relay immediately when native download is unavailable", async () => {
+  const fixture = createTestEnv();
+  const server = await startAppServer(app, fixture);
+  const dir = await mkdtemp(join(tmpdir(), "soe-posix-bootstrap-e2e-"));
+  let agent: ReturnType<typeof spawn> | undefined;
+  let output = () => "";
+  try {
+    const script = await fetchText(`${server.baseUrl}/a`);
+    const scriptPath = join(dir, "bootstrap.sh");
+    await writeFile(scriptPath, script, { mode: 0o700 });
+    agent = spawn(sh, [scriptPath], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        SOE_NATIVE_URL: "http://127.0.0.1:9/soe-agent",
+        NO_PROXY: "127.0.0.1,localhost",
+        no_proxy: "127.0.0.1,localhost"
+      }
+    });
+    output = captureOutput(agent);
+
+    const id = await waitForSessionId(output, 10_000);
+    const result = await sendCommand(server.baseUrl, id, "printf soe-bootstrap-e2e", diagnostics(output, server));
+    assert.equal(result.status, 200);
+    assert.equal(result.text, "soe-bootstrap-e2e");
+
+    await endSession(server.baseUrl, id);
+    await waitForExit(agent, 10_000, output);
+  } finally {
+    if (agent && agent.exitCode === null) agent.kill();
+    await rm(dir, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
     await server.close();
   }
 });
@@ -188,8 +223,14 @@ async function createSession(baseUrl: string, path = "/api/sessions"): Promise<{
   const response = await fetch(`${baseUrl}${path}`, { method: "POST" });
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
-  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.match(id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
   return { id, script: await response.text() };
+}
+
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  return response.text();
 }
 
 async function sendCommand(baseUrl: string, id: string, body: string, details = () => "", timeoutSeconds = 10): Promise<{ status: number; text: string }> {
@@ -224,6 +265,16 @@ async function waitForExit(child: ReturnType<typeof spawn>, timeoutMs: number, o
   assert.equal(child.exitCode, 0, output());
 }
 
+async function waitForSessionId(output: () => string, timeoutMs: number): Promise<string> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const match = output().match(/Session: ([23456789abcdefghjkmnpqrstuvwxyz]{8})/);
+    if (match) return match[1];
+    await sleep(50);
+  }
+  throw new Error(`Bootstrap did not print a session id\n${output()}`);
+}
+
 function captureOutput(child: ReturnType<typeof spawn>): () => string {
   const chunks: Buffer[] = [];
   child.stdout?.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
@@ -240,6 +291,10 @@ function diagnostics(output: () => string, server: TestServer): () => string {
     "recent requests:",
     JSON.stringify(server.requests.slice(-50))
   ].join("\n");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function powerShellArgs(command: string, scriptPath: string): string[] {

@@ -4,7 +4,7 @@ import { quotePowerShell } from "../shared/strings";
 export function powerShellAgentScript(baseUrl: string, meta: SessionMeta): string {
   return `$ErrorActionPreference = "Stop"
 $BaseUrl = ${quotePowerShell(baseUrl)}
-$SessionId = ${quotePowerShell(meta.id)}
+$SessionId = ${quotePowerShell(meta.code)}
 $Expires = ${quotePowerShell(new Date(meta.expiresAt).toISOString())}
 $PlatformName = if ($PSVersionTable.Platform) { [string]$PSVersionTable.Platform } else { [string][Environment]::OSVersion.Platform }
 $Headers = @{
@@ -92,6 +92,7 @@ function Invoke-AgentRequest {
 }
 
 function Send-Bye {
+  if ($env:SOE_NO_END_ON_EXIT -eq "1") { return }
   try { Invoke-AgentRequest -Method Post -Path "/api/sessions/$SessionId/end" | Out-Null } catch {}
 }
 

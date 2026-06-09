@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "vitest";
 import { strict as assert } from "node:assert";
+import { powerShellBootstrapScript, shellBootstrapScript } from "../../src/agent/bootstrap";
 import { shellAgentScript } from "../../src/agent/shell";
 import { powerShellAgentScript } from "../../src/agent/powershell";
 import type { SessionMeta } from "../../src/domain/session";
@@ -11,6 +12,7 @@ import { findCommand } from "../helpers/commands";
 
 const meta: SessionMeta = {
   id: "550e8400-e29b-41d4-a716-446655440000",
+  code: "abc234de",
   status: "waiting",
   createdAt: 0,
   expiresAt: Date.UTC(2030, 0, 1)
@@ -21,7 +23,7 @@ const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershe
 
 test("generated shell agent is portable across common Unix environments", () => {
   const script = shellAgentScript("https://soe.test", meta);
-  assert.match(script, /SESSION_ID='550e8400-e29b-41d4-a716-446655440000'/);
+  assert.match(script, /SESSION_ID='abc234de'/);
   assert.match(script, /pbcopy/);
   assert.match(script, /wl-copy/);
   assert.match(script, /xclip -selection clipboard/);
@@ -30,6 +32,7 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.match(script, /base64 -d/);
   assert.match(script, /base64 -D/);
   assert.match(script, /command -v timeout/);
+  assert.match(script, /SOE_NO_END_ON_EXIT/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/hello/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/next/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/result\/\$command_id\?exit=\$exit_code/);
@@ -53,7 +56,7 @@ test.skipIf(unixShells.length === 0)("generated shell agent is syntax-valid acro
 test("generated PowerShell agent keeps Windows request fallbacks", () => {
   const script = powerShellAgentScript("https://soe.test", meta);
 
-  assert.match(script, /\$SessionId = "550e8400-e29b-41d4-a716-446655440000"/);
+  assert.match(script, /\$SessionId = "abc234de"/);
   assert.match(script, /Set-Clipboard/);
   assert.match(script, /System\.Net\.WebRequest/);
   assert.match(script, /Get-ResponseHeader/);
@@ -61,6 +64,7 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   assert.match(script, /Start-ThreadJob/);
   assert.match(script, /Start-Job/);
   assert.match(script, /X-Command-Timeout/);
+  assert.match(script, /SOE_NO_END_ON_EXIT/);
   assert.match(script, /Command timed out after \$TimeoutSeconds seconds/);
   assert.match(script, /\$StatusCode -eq 204/);
   assert.ok(!script.includes("Start-Sleep -Seconds 2"));
@@ -81,6 +85,22 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
 
 test.skipIf(!powerShell)("generated PowerShell agent parses", async () => {
   await assertPowerShellParses(powerShell, powerShellAgentScript("https://soe.test", meta));
+}, 30_000);
+
+test.skipIf(unixShells.length === 0)("generated POSIX bootstrap is syntax-valid across available Unix shells", async () => {
+  const script = shellBootstrapScript("https://soe.test");
+  assert.match(script, /SOE_NATIVE_BASE_URL/);
+  assert.match(script, /SOE_NO_END_ON_EXIT=1 sh "\$AGENT_FILE"/);
+  assert.match(script, /exec "\$NATIVE_FILE" --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
+  for (const shell of unixShells) await assertShellSyntax(shell, script);
+});
+
+test.skipIf(!powerShell)("generated PowerShell bootstrap parses", async () => {
+  const script = powerShellBootstrapScript("https://soe.test");
+  assert.match(script, /SOE_NATIVE_BASE_URL/);
+  assert.match(script, /\$env:SOE_NO_END_ON_EXIT = "1"/);
+  assert.match(script, /--base-url \$BaseUrl --session \$SessionId/);
+  await assertPowerShellParses(powerShell, script);
 }, 30_000);
 
 async function assertShellSyntax(sh: string, script: string): Promise<void> {

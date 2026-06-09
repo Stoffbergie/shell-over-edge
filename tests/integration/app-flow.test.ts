@@ -5,11 +5,22 @@ import { createSession, createTestEnv, text, type TestFixture } from "../helpers
 
 console.info = () => {};
 
-test("session creation returns plain scripts keyed by a uuid capability", async () => {
+test("session creation returns plain scripts keyed by a short code capability", async () => {
   const fixture = createTestEnv();
+  const bootstrap = await app.request("/a", {}, fixture.env, fixture.ctx);
+  assert.equal(bootstrap.status, 200);
+  assert.equal(bootstrap.headers.get("Content-Type"), "text/x-shellscript; charset=utf-8");
+  assert.match(await text(bootstrap), /SOE_NO_END_ON_EXIT=1 sh "\$AGENT_FILE"/);
+
+  const powerShellBootstrap = await app.request("/a.ps1", {}, fixture.env, fixture.ctx);
+  assert.equal(powerShellBootstrap.status, 200);
+  assert.equal(powerShellBootstrap.headers.get("Content-Type"), "text/plain; charset=utf-8");
+  assert.match(await text(powerShellBootstrap), /\$env:SOE_NO_END_ON_EXIT = "1"/);
+
   const shell = await createSession(app, fixture);
   assert.equal(shell.contentType, "text/x-shellscript; charset=utf-8");
   assert.equal(shell.code, shell.id);
+  assert.match(shell.id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
   assert.ok(shell.script.startsWith("#!/bin/sh"));
   assert.ok(shell.script.includes(`SESSION_ID='${shell.id}'`));
   assert.ok(shell.script.includes(`/api/sessions/$SESSION_ID/next`));
@@ -20,6 +31,7 @@ test("session creation returns plain scripts keyed by a uuid capability", async 
 
   const powerShell = await createSession(app, fixture, "/api/sessions.ps1");
   assert.equal(powerShell.contentType, "text/plain; charset=utf-8");
+  assert.match(powerShell.id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
   assert.ok(powerShell.script.includes(`$SessionId = "${powerShell.id}"`));
   assert.ok(powerShell.script.includes("/api/sessions/$SessionId/next"));
   assert.ok(powerShell.script.includes("Set-Clipboard"));
