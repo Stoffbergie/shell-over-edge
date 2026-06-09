@@ -75,6 +75,7 @@ async function main() {
   if (pkg.homepage !== "https://soe.stoff.dev") failures.push("package.json homepage must be https://soe.stoff.dev");
   if (pkg.repository?.url !== "https://github.com/Stoffberg/shell-over-edge.git") failures.push("package.json repository URL is wrong");
   if (pkg.scripts?.test !== "vitest run") failures.push("package.json test script must use Vitest");
+  if (!pkg.scripts?.["test:load"]) failures.push("package.json missing test:load");
   if (!pkg.scripts?.["typecheck:test"]) failures.push("package.json missing typecheck:test");
   if (!pkg.devDependencies?.vitest) failures.push("package.json missing vitest");
 

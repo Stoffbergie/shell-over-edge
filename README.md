@@ -203,6 +203,12 @@ pnpm run validate
 
 That runs source typechecking, test typechecking, Vitest, repo audit, and a Wrangler dry run.
 
+Relay/direct load e2e:
+
+```sh
+pnpm run test:load
+```
+
 ## Cloudflare
 
 Required bindings:

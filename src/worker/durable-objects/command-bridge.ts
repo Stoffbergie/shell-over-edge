@@ -24,16 +24,20 @@ type CommandPayload = {
 type ResponseWaiter = {
   commandId?: string;
   resolve: (response: Response) => void;
-  timer: ReturnType<typeof setTimeout>;
+  queueTimer?: ReturnType<typeof setTimeout>;
+  resultTimer?: ReturnType<typeof setTimeout>;
 };
 
 const maxSendWaitMs = 55_000;
 const nextWaitMs = 25_000;
+const recentCommandTtlMs = 5 * 60 * 1000;
+const maxRecentCommands = 500;
 
 export class CommandBridge extends DurableObject<Env> {
   private queued: BridgeCommand[] = [];
   private nextWaiters: ResponseWaiter[] = [];
   private resultWaiters = new Map<string, ResponseWaiter>();
+  private recentCommands = new Map<string, number>();
   private candidates: DirectCandidate[] = [];
   private attempts: DirectAttempt[] = [];
 
@@ -66,15 +70,15 @@ export class CommandBridge extends DurableObject<Env> {
       timeoutSeconds: normalizeTimeout(payload.timeoutSeconds ?? 30)
     };
 
-    const waitMs = Math.min(command.timeoutSeconds * 1000 + 1000, maxSendWaitMs);
     const response = new Promise<Response>((resolve) => {
-      const timer = setTimeout(() => {
+      const queueTimer = setTimeout(() => {
         this.resultWaiters.delete(command.id);
         this.removeQueued(command.id);
-        logInfo("command_timeout", { commandId: command.id, waitMs });
+        this.rememberCommand(command.id);
+        logInfo("command_timeout", { commandId: command.id, waitMs: maxSendWaitMs, phase: "queue" });
         resolve(textResponse("Timed out waiting for command result\n", 504));
-      }, waitMs);
-      this.resultWaiters.set(command.id, { commandId: command.id, resolve, timer });
+      }, maxSendWaitMs);
+      this.resultWaiters.set(command.id, { commandId: command.id, resolve, queueTimer });
     });
 
     this.dispatch(command);
@@ -84,7 +88,10 @@ export class CommandBridge extends DurableObject<Env> {
 
   private nextCommand(request: Request): Response | Promise<Response> {
     const command = this.queued.shift();
-    if (command) return commandResponse(command);
+    if (command) {
+      this.markDelivered(command);
+      return commandResponse(command);
+    }
 
     return new Promise<Response>((resolve) => {
       let settled = false;
@@ -96,19 +103,25 @@ export class CommandBridge extends DurableObject<Env> {
         resolve(response);
       };
       const timer = setTimeout(() => finish(new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } })), nextWaitMs);
-      this.nextWaiters.push({ resolve: finish, timer });
+      this.nextWaiters.push({ resolve: finish, queueTimer: timer });
       request.signal.addEventListener("abort", () => finish(new Response(null, { status: 499 })), { once: true });
     });
   }
 
   private async receiveResult(request: Request, commandId: string): Promise<Response> {
     const waiter = this.resultWaiters.get(commandId);
-    if (!waiter) return textResponse("Command not found\n", 404);
+    if (!waiter) {
+      this.pruneRecentCommands(Date.now());
+      if (this.recentCommands.has(commandId)) return textResponse("ok\n");
+      return textResponse("Command not found\n", 404);
+    }
 
     const exitCode = parseExitCode(new URL(request.url).searchParams.get("exit"));
     const output = await readLimitedText(request, maxResultBytes);
-    clearTimeout(waiter.timer);
+    if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
+    if (waiter.resultTimer) clearTimeout(waiter.resultTimer);
     this.resultWaiters.delete(commandId);
+    this.rememberCommand(commandId);
     waiter.resolve(new Response(output, {
       status: exitCode === 0 ? 200 : 500,
       headers: {
@@ -178,15 +191,18 @@ export class CommandBridge extends DurableObject<Env> {
 
   private endSession(): Response {
     for (const waiter of this.nextWaiters) {
-      clearTimeout(waiter.timer);
+      if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
+      if (waiter.resultTimer) clearTimeout(waiter.resultTimer);
       waiter.resolve(textResponse("Session ended\n", 410));
     }
     for (const waiter of this.resultWaiters.values()) {
-      clearTimeout(waiter.timer);
+      if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
+      if (waiter.resultTimer) clearTimeout(waiter.resultTimer);
       waiter.resolve(textResponse("Session ended\n", 410));
     }
     this.nextWaiters = [];
     this.resultWaiters.clear();
+    this.recentCommands.clear();
     this.queued = [];
     this.candidates = [];
     this.attempts = [];
@@ -199,7 +215,8 @@ export class CommandBridge extends DurableObject<Env> {
       this.queued.push(command);
       return;
     }
-    clearTimeout(waiter.timer);
+    this.markDelivered(command);
+    if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
     waiter.resolve(commandResponse(command));
   }
 
@@ -215,6 +232,36 @@ export class CommandBridge extends DurableObject<Env> {
     const keep = sortDirectCandidates(this.candidates.filter((candidate) => candidate.role === role)).slice(0, maxDirectCandidatesPerRole);
     const keepIds = new Set(keep.map((candidate) => candidate.id));
     this.candidates = this.candidates.filter((candidate) => candidate.role !== role || keepIds.has(candidate.id));
+  }
+
+  private markDelivered(command: BridgeCommand): void {
+    const waiter = this.resultWaiters.get(command.id);
+    if (!waiter || waiter.resultTimer) return;
+    if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
+    const waitMs = Math.min(command.timeoutSeconds * 1000 + 1000, maxSendWaitMs);
+    waiter.resultTimer = setTimeout(() => {
+      this.resultWaiters.delete(command.id);
+      this.rememberCommand(command.id);
+      logInfo("command_timeout", { commandId: command.id, waitMs, phase: "result" });
+      waiter.resolve(textResponse("Timed out waiting for command result\n", 504));
+    }, waitMs);
+  }
+
+  private rememberCommand(commandId: string): void {
+    const now = Date.now();
+    this.pruneRecentCommands(now);
+    this.recentCommands.set(commandId, now + recentCommandTtlMs);
+    if (this.recentCommands.size <= maxRecentCommands) return;
+    for (const id of this.recentCommands.keys()) {
+      this.recentCommands.delete(id);
+      if (this.recentCommands.size <= maxRecentCommands) break;
+    }
+  }
+
+  private pruneRecentCommands(now: number): void {
+    for (const [commandId, expiresAt] of this.recentCommands) {
+      if (expiresAt <= now) this.recentCommands.delete(commandId);
+    }
   }
 }
 

@@ -30,8 +30,13 @@ type BridgeCommand = {
 
 type BridgeWaiter = {
   resolve: (response: Response) => void;
-  timer: ReturnType<typeof setTimeout>;
+  queueTimer?: ReturnType<typeof setTimeout>;
+  resultTimer?: ReturnType<typeof setTimeout>;
 };
+
+const fakeMaxSendWaitMs = 55_000;
+const fakeRecentCommandTtlMs = 5 * 60 * 1000;
+const fakeMaxRecentCommands = 500;
 
 export function createTestEnv(options: TestEnvOptions = {}): TestFixture {
   const mailbox = new MemoryR2Bucket();
@@ -171,6 +176,7 @@ class FakeSessionBridge {
   private queued: BridgeCommand[] = [];
   private nextWaiters: BridgeWaiter[] = [];
   private resultWaiters = new Map<string, BridgeWaiter>();
+  private recentCommands = new Map<string, number>();
   private candidates: DirectCandidate[] = [];
   private attempts: DirectAttempt[] = [];
 
@@ -198,12 +204,13 @@ class FakeSessionBridge {
       timeoutSeconds: payload.timeoutSeconds || 30
     };
     const response = new Promise<Response>((resolve) => {
-      const timer = setTimeout(() => {
+      const queueTimer = setTimeout(() => {
         this.resultWaiters.delete(command.id);
         this.queued = this.queued.filter((item) => item.id !== command.id);
+        this.rememberCommand(command.id);
         resolve(new Response("Timed out waiting for command result\n", { status: 504 }));
-      }, Math.min(command.timeoutSeconds * 1000 + 1000, 55_000));
-      this.resultWaiters.set(command.id, { resolve, timer });
+      }, fakeMaxSendWaitMs);
+      this.resultWaiters.set(command.id, { resolve, queueTimer });
     });
     this.dispatch(command);
     return response;
@@ -211,22 +218,33 @@ class FakeSessionBridge {
 
   private next(): Response | Promise<Response> {
     const command = this.queued.shift();
-    if (command) return commandResponse(command);
+    if (command) {
+      this.markDelivered(command);
+      return commandResponse(command);
+    }
     return new Promise<Response>((resolve) => {
       const timer = setTimeout(() => {
         this.nextWaiters = this.nextWaiters.filter((waiter) => waiter.resolve !== resolve);
         resolve(new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } }));
       }, 25_000);
-      this.nextWaiters.push({ resolve, timer });
+      this.nextWaiters.push({ resolve, queueTimer: timer });
     });
   }
 
   private result(commandId: string, exit: string | null, body: string): Response {
     const waiter = this.resultWaiters.get(commandId);
-    if (!waiter) return new Response("Command not found\n", { status: 404 });
+    if (!waiter) {
+      this.pruneRecentCommands(Date.now());
+      if (this.recentCommands.has(commandId)) {
+        return new Response("ok\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
+      }
+      return new Response("Command not found\n", { status: 404 });
+    }
     const exitCode = Number(exit || "0");
-    clearTimeout(waiter.timer);
+    if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
+    if (waiter.resultTimer) clearTimeout(waiter.resultTimer);
     this.resultWaiters.delete(commandId);
+    this.rememberCommand(commandId);
     waiter.resolve(new Response(body, {
       status: exitCode === 0 ? 200 : 500,
       headers: {
@@ -303,16 +321,19 @@ class FakeSessionBridge {
 
   private end(): Response {
     for (const waiter of this.nextWaiters) {
-      clearTimeout(waiter.timer);
+      if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
+      if (waiter.resultTimer) clearTimeout(waiter.resultTimer);
       waiter.resolve(new Response("Session ended\n", { status: 410 }));
     }
     for (const waiter of this.resultWaiters.values()) {
-      clearTimeout(waiter.timer);
+      if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
+      if (waiter.resultTimer) clearTimeout(waiter.resultTimer);
       waiter.resolve(new Response("Session ended\n", { status: 410 }));
     }
     this.queued = [];
     this.nextWaiters = [];
     this.resultWaiters.clear();
+    this.recentCommands.clear();
     this.candidates = [];
     this.attempts = [];
     return new Response("ended\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
@@ -324,7 +345,8 @@ class FakeSessionBridge {
       this.queued.push(command);
       return;
     }
-    clearTimeout(waiter.timer);
+    this.markDelivered(command);
+    if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
     waiter.resolve(commandResponse(command));
   }
 
@@ -336,6 +358,33 @@ class FakeSessionBridge {
     const keep = sortDirectCandidates(this.candidates.filter((candidate) => candidate.role === role)).slice(0, 8);
     const keepIds = new Set(keep.map((candidate) => candidate.id));
     this.candidates = this.candidates.filter((candidate) => candidate.role !== role || keepIds.has(candidate.id));
+  }
+
+  private markDelivered(command: BridgeCommand): void {
+    const waiter = this.resultWaiters.get(command.id);
+    if (!waiter || waiter.resultTimer) return;
+    if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
+    waiter.resultTimer = setTimeout(() => {
+      this.resultWaiters.delete(command.id);
+      this.rememberCommand(command.id);
+      waiter.resolve(new Response("Timed out waiting for command result\n", { status: 504 }));
+    }, Math.min(command.timeoutSeconds * 1000 + 1000, fakeMaxSendWaitMs));
+  }
+
+  private rememberCommand(commandId: string): void {
+    const now = Date.now();
+    this.pruneRecentCommands(now);
+    this.recentCommands.set(commandId, now + fakeRecentCommandTtlMs);
+    for (const id of this.recentCommands.keys()) {
+      if (this.recentCommands.size <= fakeMaxRecentCommands) break;
+      this.recentCommands.delete(id);
+    }
+  }
+
+  private pruneRecentCommands(now: number): void {
+    for (const [commandId, expiresAt] of this.recentCommands) {
+      if (expiresAt <= now) this.recentCommands.delete(commandId);
+    }
   }
 }
 

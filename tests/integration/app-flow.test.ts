@@ -84,6 +84,120 @@ test("send waits for the agent result and returns plain command output", async (
   assert.equal(await text(sentRaw), "nope\n");
 });
 
+test("parallel sends keep command results matched under burst load", async () => {
+  const fixture = createTestEnv();
+  const session = await createSession(app, fixture);
+  const count = 16;
+  const sends = Array.from({ length: count }, (_, index) => {
+    const body = `printf item-${index}`;
+    return {
+      body,
+      response: app.request(`/api/sessions/${session.id}/send`, {
+        method: "POST",
+        body: JSON.stringify({ body, timeoutSeconds: 20 })
+      }, fixture.env, fixture.ctx)
+    };
+  });
+
+  const commands = [];
+  for (let index = 0; index < count; index += 1) {
+    const next = await waitForNext(session.id, fixture);
+    commands.push({
+      id: next.headers.get("X-Command-Id") || "",
+      body: await text(next)
+    });
+  }
+  assert.equal(new Set(commands.map((command) => command.id)).size, count);
+
+  for (const command of commands.reverse()) {
+    const result = await app.request(`/api/sessions/${session.id}/result/${command.id}?exit=0`, {
+      method: "POST",
+      body: `done:${command.body}`
+    }, fixture.env, fixture.ctx);
+    assert.equal(result.status, 200);
+    assert.equal(await text(result), "ok\n");
+  }
+
+  const responses = await Promise.all(sends.map(async (send) => ({
+    body: send.body,
+    response: await send.response
+  })));
+  for (const item of responses) {
+    assert.equal(item.response.status, 200);
+    assert.equal(item.response.headers.get("X-Exit-Code"), "0");
+    assert.equal(await text(item.response), `done:${item.body}`);
+  }
+});
+
+test("queued commands do not timeout before an agent receives them", async () => {
+  const fixture = createTestEnv();
+  const session = await createSession(app, fixture);
+  const first = app.request(`/api/sessions/${session.id}/send`, {
+    method: "POST",
+    body: '{"body":"first","timeoutSeconds":1}'
+  }, fixture.env, fixture.ctx);
+  const second = app.request(`/api/sessions/${session.id}/send`, {
+    method: "POST",
+    body: '{"body":"second","timeoutSeconds":1}'
+  }, fixture.env, fixture.ctx);
+
+  await sleep(2200);
+
+  const firstCommand = await waitForNext(session.id, fixture);
+  const firstCommandId = firstCommand.headers.get("X-Command-Id") || "";
+  assert.equal(await text(firstCommand), "first");
+  assert.equal((await app.request(`/api/sessions/${session.id}/result/${firstCommandId}?exit=0`, {
+    method: "POST",
+    body: "first-ok"
+  }, fixture.env, fixture.ctx)).status, 200);
+
+  const secondCommand = await waitForNext(session.id, fixture);
+  const secondCommandId = secondCommand.headers.get("X-Command-Id") || "";
+  assert.equal(await text(secondCommand), "second");
+  assert.equal((await app.request(`/api/sessions/${session.id}/result/${secondCommandId}?exit=0`, {
+    method: "POST",
+    body: "second-ok"
+  }, fixture.env, fixture.ctx)).status, 200);
+
+  assert.equal((await first).status, 200);
+  const secondResponse = await second;
+  assert.equal(secondResponse.status, 200);
+  assert.equal(await text(secondResponse), "second-ok");
+});
+
+test("late known command results are acknowledged after helper timeout", async () => {
+  const fixture = createTestEnv();
+  const session = await createSession(app, fixture);
+  const send = app.request(`/api/sessions/${session.id}/send`, {
+    method: "POST",
+    body: '{"body":"slow","timeoutSeconds":1}'
+  }, fixture.env, fixture.ctx);
+
+  const next = await waitForNext(session.id, fixture);
+  const commandId = next.headers.get("X-Command-Id") || "";
+  assert.equal(await text(next), "slow");
+
+  await sleep(2200);
+
+  const timedOut = await send;
+  assert.equal(timedOut.status, 504);
+  assert.equal(await text(timedOut), "Timed out waiting for command result\n");
+
+  const late = await app.request(`/api/sessions/${session.id}/result/${commandId}?exit=0`, {
+    method: "POST",
+    body: "too-late"
+  }, fixture.env, fixture.ctx);
+  assert.equal(late.status, 200);
+  assert.equal(await text(late), "ok\n");
+
+  const unknown = await app.request(`/api/sessions/${session.id}/result/not-a-command?exit=0`, {
+    method: "POST",
+    body: "missing"
+  }, fixture.env, fixture.ctx);
+  assert.equal(unknown.status, 404);
+  assert.equal(await text(unknown), "Command not found\n");
+});
+
 test("sessions exchange short-lived direct transport candidates", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);

@@ -41,6 +41,40 @@ test.skipIf(!sh || !curl)("generated POSIX agent script connects, runs a command
   }
 });
 
+test.skipIf(!sh || !curl)("generated POSIX agent script drains parallel relay sends without result mixups", async () => {
+  const fixture = createTestEnv();
+  const server = await startAppServer(app, fixture);
+  const dir = await mkdtemp(join(tmpdir(), "soe-posix-parallel-e2e-"));
+  let agent: ReturnType<typeof spawn> | undefined;
+  let output = () => "";
+  try {
+    const session = await createSession(server.baseUrl);
+    const scriptPath = join(dir, "agent.sh");
+    await writeFile(scriptPath, session.script, { mode: 0o700 });
+    agent = spawn(sh, [scriptPath], { cwd: dir });
+    output = captureOutput(agent);
+
+    const count = 8;
+    const results = await Promise.all(Array.from({ length: count }, (_, index) => {
+      const expected = `soe-posix-parallel-${index}`;
+      return sendCommand(server.baseUrl, session.id, `printf ${expected}`, diagnostics(output, server))
+        .then((result) => ({ expected, result }));
+    }));
+
+    for (const item of results) {
+      assert.equal(item.result.status, 200);
+      assert.equal(item.result.text, item.expected);
+    }
+
+    await endSession(server.baseUrl, session.id);
+    await waitForExit(agent, 10_000, output);
+  } finally {
+    if (agent && agent.exitCode === null) agent.kill();
+    await rm(dir, { force: true, recursive: true });
+    await server.close();
+  }
+});
+
 test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell agent script connects, runs a command, and streams text back through send", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
