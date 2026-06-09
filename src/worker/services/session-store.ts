@@ -1,5 +1,6 @@
-import { cleanupRetentionMs } from "./config";
-import type { Env, SessionMeta } from "./types";
+import type { SessionMeta } from "../../domain/session";
+import { cleanupRetentionMs } from "../../shared/config";
+import type { Env } from "../env";
 
 export async function expireIfNeeded(env: Env, meta: SessionMeta): Promise<SessionMeta> {
   if (Date.now() < meta.expiresAt || meta.status === "ended" || meta.status === "expired") return meta;

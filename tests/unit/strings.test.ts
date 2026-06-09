@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import { strict as assert } from "node:assert";
-import { quotePowerShell, quoteShell } from "../../.tmp/test-build/src/strings.js";
+import { quotePowerShell, quoteShell } from "../../src/shared/strings";
 
 test("quotes shell values without losing embedded single quotes", () => {
   assert.equal(quoteShell("simple"), "'simple'");

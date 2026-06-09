@@ -1,8 +1,8 @@
-import { app } from "./app";
-import { cleanupExpiredSessions } from "./session-store";
-import type { Env } from "./types";
+import { app } from "./worker/app";
+import { cleanupExpiredSessions } from "./worker/services/session-store";
+import type { Env } from "./worker/env";
 
-export { CommandBridge } from "./bridge";
+export { CommandBridge } from "./worker/durable-objects/command-bridge";
 
 export default {
   fetch: app.fetch,

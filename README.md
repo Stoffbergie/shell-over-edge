@@ -4,88 +4,83 @@
 [![Deploy](https://github.com/Stoffberg/shell-over-edge/actions/workflows/deploy.yml/badge.svg)](https://github.com/Stoffberg/shell-over-edge/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Temporary shell and file access through Cloudflare Workers.
+Temporary shell access through Cloudflare Workers.
 
 Production: [https://soe.stoff.dev](https://soe.stoff.dev)
 
 Short name: `soe`.
 
+## API
+
+Create a POSIX shell session:
+
+```sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions | sh
+```
+
+Create a PowerShell session:
+
+```powershell
+irm -Method Post https://soe.stoff.dev/api/sessions.ps1 | iex
+```
+
+Each generated agent prints and copies the session UUID when clipboard support is available. The UUID is also returned in the `X-Session-Id` response header.
+
+Send a command:
+
+```sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/send --data 'pwd'
+```
+
+End a session:
+
+```sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/end
+```
+
+`/send` accepts raw text. It also accepts JSON when callers need `cwd`, `timeoutSeconds`, or `timeout`.
+
 ## How It Works
 
-Create a session, send the generated command to the remote machine, then queue shell commands or small file transfers through the session API. Sessions expire after two hours.
+Sessions are UUID capabilities. R2 stores session metadata and the Durable Object for that UUID coordinates the live command handoff:
 
-## Start A Session
+- helper calls `/send`
+- generated agent long-polls `/next`
+- agent executes the command locally
+- agent posts output to `/result/<command-id>`
+- `/send` returns the plain command output
 
-```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions \
-  -H "Content-Type: application/json" \
-  --data '{"helperName":"Dirk"}'
+Responses are intentionally plain text where possible. There are no bearer tokens or URL tokens in the current API.
+
+## Repo Layout
+
+```text
+src/
+  worker.ts                         Cloudflare Worker module entry
+  worker/
+    app.ts                          Hono app, root route, error/cache middleware
+    env.ts                          Cloudflare binding types
+    routes/sessions.ts              Public session API and agent callbacks
+    durable-objects/command-bridge.ts
+    services/session-bridge.ts      Durable Object lookup boundary
+    services/session-store.ts       R2 session metadata and cleanup
+  agent/
+    shell.ts                        Generated POSIX agent
+    powershell.ts                   Generated PowerShell agent
+    terminal-usage.ts               Root terminal usage text
+  domain/session.ts                 Session domain types
+  shared/                           Small generic utilities
+tests/
+  unit/                             Pure utilities and generated script checks
+  integration/                      Worker request/response flows with fake bindings
+  e2e/                              Generated agent scripts against a local HTTP server
+  helpers/                          Typed test harnesses
+scripts/
+  repo-audit.mjs                    Repo hygiene checks
+  smoke-prod.mjs                    Live production smoke test
 ```
 
-The response includes:
-
-- `shellCommand`: run on macOS or Linux
-- `windowsCommand`: run in PowerShell
-- `helperToken`: use this from the helper side
-- `agentToken`: embedded in the generated remote-side script
-
-Tokens are sent through `Authorization: Bearer` headers, not URL query strings.
-
-## Queue A Command
-
-```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<session-id>/commands \
-  -H "Authorization: Bearer <helper-token>" \
-  -H "Content-Type: application/json" \
-  --data '{"body":"pwd"}'
-```
-
-Read events:
-
-```sh
-curl -sS https://soe.stoff.dev/api/sessions/<session-id>/events \
-  -H "Authorization: Bearer <helper-token>"
-```
-
-End the session:
-
-```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<session-id>/end \
-  -H "Authorization: Bearer <helper-token>"
-```
-
-## File Transfer
-
-Upload a file to the remote machine:
-
-```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<session-id>/upload \
-  -H "Authorization: Bearer <helper-token>" \
-  -F "path=/tmp/example.txt" \
-  -F "file=@./example.txt"
-```
-
-Read a file back:
-
-```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<session-id>/download \
-  -H "Authorization: Bearer <helper-token>" \
-  -H "Content-Type: application/json" \
-  --data '{"path":"/tmp/example.txt"}'
-```
-
-Then fetch `/api/sessions/<session-id>/downloads/<download-id>` with the same helper token.
-
-## Limits
-
-| Limit | Value |
-| --- | --- |
-| Session TTL | 2 hours |
-| Cleanup retention | 24 hours after expiry |
-| Command body | 64 KB |
-| Result body | 1 MB |
-| File upload/download | 1 MB |
-| Timeout | 1 to 3600 seconds |
+`pnpm-workspace.yaml` keeps this as a pnpm workspace now, while leaving room for future `apps/*`, `packages/*`, and `tools/*` without splitting this Worker prematurely.
 
 ## Local Development
 
@@ -97,12 +92,25 @@ pnpm run dev
 ## Validation
 
 ```sh
+pnpm run typecheck
+pnpm run typecheck:test
+pnpm run test
 pnpm run check
 pnpm run dry-run
 pnpm run smoke:prod
 ```
 
-`pnpm run validate` runs the local check chain plus a Wrangler dry run.
+`pnpm run validate` runs the full local check chain plus a Wrangler dry run.
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Session TTL | 2 hours |
+| Cleanup retention | 24 hours after expiry |
+| Command body | 64 KB |
+| Result body | 1 MB |
+| Timeout | 1 to 3600 seconds |
 
 ## Cloudflare
 
@@ -112,7 +120,6 @@ Required bindings:
 - Durable Object namespace: `COMMAND_BRIDGES`
 - Custom domain: `soe.stoff.dev`
 - Worker name: `soe`
-- Optional legacy flag: `ENABLE_LEGACY_BRIDGE=true`
 
 GitHub deploys need these repository secrets:
 

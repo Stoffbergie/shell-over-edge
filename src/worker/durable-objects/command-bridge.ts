@@ -1,9 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import { maxCommandBytes, maxResultBytes } from "./config";
-import { base64Encode, randomId } from "./crypto";
-import { cleanString, normalizeTimeout, readLimitedText, textResponse } from "./http";
-import { logInfo } from "./log";
-import type { Env } from "./types";
+import { maxCommandBytes, maxResultBytes } from "../../shared/config";
+import { base64Encode, randomId } from "../../shared/crypto";
+import { cleanString, normalizeTimeout, readLimitedText, textResponse } from "../../shared/http";
+import { logInfo } from "../../shared/log";
+import type { Env } from "../env";
 
 type BridgeCommand = {
   id: string;

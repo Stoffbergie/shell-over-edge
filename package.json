@@ -15,12 +15,14 @@
     "build": "pnpm run typecheck",
     "typecheck": "tsc --noEmit",
     "deploy": "pnpm run check && wrangler deploy",
-    "check": "pnpm run typecheck && pnpm run test && pnpm run repo:audit",
+    "check": "pnpm run typecheck && pnpm run typecheck:test && pnpm run test && pnpm run repo:audit",
     "validate": "pnpm run check && pnpm run dry-run",
     "dry-run": "wrangler deploy --dry-run",
     "repo:audit": "node scripts/repo-audit.mjs",
     "smoke:prod": "node scripts/smoke-prod.mjs",
-    "test": "node scripts/run-tests.mjs"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit"
   },
   "packageManager": "pnpm@11.5.2",
   "dependencies": {
@@ -28,7 +30,9 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260608.1",
+    "@types/node": "^25.9.2",
     "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
     "wrangler": "^4.98.0"
   },
   "homepage": "https://soe.stoff.dev",
@@ -40,5 +44,5 @@
     "url": "https://github.com/Stoffberg/shell-over-edge/issues"
   },
   "license": "MIT",
-  "description": "Temporary shell and file access through Cloudflare Workers."
+  "description": "Temporary shell access through Cloudflare Workers."
 }

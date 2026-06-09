@@ -1,5 +1,5 @@
-import { quotePowerShell } from "./strings";
-import type { SessionMeta } from "./types";
+import type { SessionMeta } from "../domain/session";
+import { quotePowerShell } from "../shared/strings";
 
 export function powerShellAgentScript(baseUrl: string, meta: SessionMeta): string {
   return `$ErrorActionPreference = "Stop"

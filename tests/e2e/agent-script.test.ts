@@ -2,27 +2,24 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { test } from "node:test";
+import { test } from "vitest";
 import { strict as assert } from "node:assert";
-import { app } from "../../.tmp/test-build/src/app.js";
-import { createTestEnv } from "../helpers/fake-env.mjs";
-import { findCommand } from "../helpers/commands.mjs";
-import { startAppServer } from "../helpers/server.mjs";
+import { app } from "../../src/worker/app";
+import { createTestEnv } from "../helpers/fake-env";
+import { findCommand } from "../helpers/commands";
+import { startAppServer, type TestServer } from "../helpers/server";
 
 console.info = () => {};
 
-test("generated POSIX agent script connects, runs a command, and streams text back through send", async (t) => {
-  const sh = findCommand("sh");
-  const curl = findCommand("curl");
-  if (!sh || !curl) {
-    t.skip("sh and curl are required for POSIX agent e2e");
-    return;
-  }
+const sh = findCommand("sh");
+const curl = findCommand("curl");
+const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershell.exe", "powershell"] : ["pwsh"]);
 
+test.skipIf(!sh || !curl)("generated POSIX agent script connects, runs a command, and streams text back through send", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
   const dir = await mkdtemp(join(tmpdir(), "soe-posix-e2e-"));
-  let agent;
+  let agent: ReturnType<typeof spawn> | undefined;
   let output = () => "";
   try {
     const session = await createSession(server.baseUrl);
@@ -44,22 +41,11 @@ test("generated POSIX agent script connects, runs a command, and streams text ba
   }
 });
 
-test("generated PowerShell agent script connects, runs a command, and streams text back through send", async (t) => {
-  if (process.platform !== "win32") {
-    t.skip("PowerShell agent e2e runs on Windows; POSIX agent e2e covers Unix hosts");
-    return;
-  }
-
-  const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershell.exe", "powershell"] : ["pwsh"]);
-  if (!powerShell) {
-    t.skip("PowerShell is required for PowerShell agent e2e");
-    return;
-  }
-
+test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell agent script connects, runs a command, and streams text back through send", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
   const dir = await mkdtemp(join(tmpdir(), "soe-powershell-e2e-"));
-  let agent;
+  let agent: ReturnType<typeof spawn> | undefined;
   let output = () => "";
   try {
     const session = await createSession(server.baseUrl, "/api/sessions.ps1");
@@ -89,15 +75,15 @@ test("generated PowerShell agent script connects, runs a command, and streams te
   }
 });
 
-async function createSession(baseUrl, path = "/api/sessions") {
+async function createSession(baseUrl: string, path = "/api/sessions"): Promise<{ id: string; script: string }> {
   const response = await fetch(`${baseUrl}${path}`, { method: "POST" });
   assert.equal(response.status, 200);
-  const id = response.headers.get("X-Session-Id");
-  assert.match(id || "", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  const id = response.headers.get("X-Session-Id") || "";
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   return { id, script: await response.text() };
 }
 
-async function sendCommand(baseUrl, id, body, details = () => "") {
+async function sendCommand(baseUrl: string, id: string, body: string, details = () => ""): Promise<{ status: number; text: string }> {
   const response = await fetch(`${baseUrl}/api/sessions/${id}/send`, {
     method: "POST",
     body: JSON.stringify({ body, timeoutSeconds: 10 })
@@ -107,14 +93,14 @@ async function sendCommand(baseUrl, id, body, details = () => "") {
   return result;
 }
 
-async function endSession(baseUrl, id) {
+async function endSession(baseUrl: string, id: string): Promise<void> {
   const response = await fetch(`${baseUrl}/api/sessions/${id}/end`, { method: "POST" });
   assert.equal(response.status, 200);
 }
 
-async function waitForExit(child, timeoutMs, output) {
+async function waitForExit(child: ReturnType<typeof spawn>, timeoutMs: number, output: () => string): Promise<void> {
   if (child.exitCode === null) {
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error(`Agent did not exit\n${output()}`)), timeoutMs);
       child.once("exit", () => {
         clearTimeout(timeout);
@@ -129,14 +115,14 @@ async function waitForExit(child, timeoutMs, output) {
   assert.equal(child.exitCode, 0, output());
 }
 
-function captureOutput(child) {
-  const chunks = [];
+function captureOutput(child: ReturnType<typeof spawn>): () => string {
+  const chunks: Buffer[] = [];
   child.stdout?.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
   child.stderr?.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
   return () => Buffer.concat(chunks).toString("utf8");
 }
 
-function diagnostics(output, server) {
+function diagnostics(output: () => string, server: TestServer): () => string {
   return () => [
     "agent output:",
     output(),
@@ -147,7 +133,7 @@ function diagnostics(output, server) {
   ].join("\n");
 }
 
-function powerShellArgs(command, scriptPath) {
+function powerShellArgs(command: string, scriptPath: string): string[] {
   const base = ["-NoProfile"];
   if (/powershell(?:\.exe)?$/i.test(command)) base.push("-ExecutionPolicy", "Bypass");
   return [...base, "-File", scriptPath];

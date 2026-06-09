@@ -1,7 +1,23 @@
-import { createServer } from "node:http";
+import { createServer, type IncomingHttpHeaders, type IncomingMessage } from "node:http";
+import type { Hono } from "hono";
+import type { Env } from "../../src/worker/env";
+import type { TestFixture } from "./fake-env";
 
-export async function startAppServer(app, fixture) {
-  const requests = [];
+export type RequestLog = {
+  at: number;
+  method: string;
+  path: string;
+  status: number;
+};
+
+export type TestServer = {
+  baseUrl: string;
+  requests: RequestLog[];
+  close: () => Promise<void>;
+};
+
+export async function startAppServer(app: Hono<{ Bindings: Env }>, fixture: TestFixture): Promise<TestServer> {
+  const requests: RequestLog[] = [];
   const server = createServer(async (incoming, outgoing) => {
     try {
       const url = `${fixture.env.BASE_URL}${incoming.url || "/"}`;
@@ -25,7 +41,7 @@ export async function startAppServer(app, fixture) {
     }
   });
 
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Could not start local test server");
   fixture.env.BASE_URL = `http://127.0.0.1:${address.port}`;
@@ -33,11 +49,11 @@ export async function startAppServer(app, fixture) {
   return {
     baseUrl: fixture.env.BASE_URL,
     requests,
-    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
 }
 
-function requestHeaders(source) {
+function requestHeaders(source: IncomingHttpHeaders): Headers {
   const headers = new Headers();
   for (const [key, value] of Object.entries(source)) {
     if (Array.isArray(value)) {
@@ -49,8 +65,11 @@ function requestHeaders(source) {
   return headers;
 }
 
-async function requestBody(request) {
-  const chunks = [];
+async function requestBody(request: IncomingMessage): Promise<ArrayBuffer> {
+  const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks);
+  const bytes = Buffer.concat(chunks);
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
 }

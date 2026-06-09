@@ -40,7 +40,7 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Check
-        run: pnpm run typecheck && pnpm run repo:audit
+        run: pnpm run typecheck && pnpm run typecheck:test && pnpm run repo:audit
 
       - name: Validate Worker bundle
         run: pnpm run dry-run
