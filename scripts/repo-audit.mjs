@@ -21,9 +21,11 @@ const requiredFiles = [
   ".github/workflows/labeler.yml",
   ".github/workflows/release.yml",
   "LICENSE",
+  "llms.txt",
   "pnpm-workspace.yaml",
   "scripts/repo-audit.mjs",
   "scripts/smoke-prod.mjs",
+  "skills/shell-over-edge/SKILL.md",
   "tsconfig.test.json",
   "vitest.config.ts"
 ];
@@ -84,8 +86,20 @@ async function main() {
   const readme = await readText(join(root, "README.md"));
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
   if (!readme.includes("Temporary shell access through Cloudflare Workers.")) failures.push("README one-liner is wrong");
+  if (!readme.includes("llms.txt")) failures.push("README must link llms.txt");
+  if (!readme.includes("skills/shell-over-edge/SKILL.md")) failures.push("README must link the Shell Over Edge skill");
   if (readme.includes("Authorization: Bearer")) failures.push("README must not document retired bearer-token API");
   if (readme.includes("/commands")) failures.push("README must not document retired commands endpoint");
+
+  const llms = await readText(join(root, "llms.txt"));
+  if (!llms.includes("POST /api/sessions")) failures.push("llms.txt must document session creation");
+  if (!llms.includes("POST /api/sessions/<uuid>/send")) failures.push("llms.txt must document command send");
+  if (llms.includes("Authorization: Bearer")) failures.push("llms.txt must not document retired bearer-token API");
+
+  const skill = await readText(join(root, "skills/shell-over-edge/SKILL.md"));
+  if (!skill.includes("name: shell-over-edge")) failures.push("Shell Over Edge skill missing name metadata");
+  if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<uuid>/send")) failures.push("Shell Over Edge skill must document command send");
+  if (skill.includes("Authorization: Bearer")) failures.push("Shell Over Edge skill must not document retired bearer-token API");
 
   if (failures.length > 0) {
     console.error(failures.join("\n"));

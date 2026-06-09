@@ -1,0 +1,67 @@
+# Shell Over Edge
+
+> Temporary shell access through Cloudflare Workers. Production base URL: `https://soe.stoff.dev`.
+
+Shell Over Edge creates short-lived UUID sessions. A generated agent script runs on the remote machine, long-polls the Worker for commands, executes them locally, then posts plain text output back.
+
+## Public API
+
+- Create POSIX session: `POST /api/sessions`
+- Create PowerShell session: `POST /api/sessions.ps1`
+- Send command: `POST /api/sessions/<uuid>/send`
+- End session: `POST /api/sessions/<uuid>/end`
+
+## Quick Use
+
+```sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions | sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/send --data 'pwd'
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/end
+```
+
+```powershell
+irm -Method Post https://soe.stoff.dev/api/sessions.ps1 | iex
+curl.exe -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/send --data "pwd"
+curl.exe -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/end
+```
+
+## Command Payloads
+
+Default `/send` body is raw text and returns raw command output.
+
+Use JSON only when setting options:
+
+```json
+{"body":"pwd","cwd":"/tmp","timeoutSeconds":30}
+```
+
+`timeout` is also accepted. Timeouts are clamped to 1-3600 seconds. The synchronous `/send` waits up to the platform-safe bridge wait and returns `504` if no result arrives.
+
+## Invariants
+
+- Sessions are UUID capabilities.
+- The response header `X-Session-Id` contains the UUID for newly created sessions.
+- Generated agents print the UUID and copy it to the clipboard when possible.
+- Most responses are plain text by design.
+- No bearer tokens, helper tokens, agent tokens, URL tokens, or auth headers are used in the current API.
+- Retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, and `/connect.sh` are invalid.
+- Command body limit: 64 KB.
+- Result body limit: 1 MB.
+- Session TTL: 2 hours.
+- Expired session cleanup retention: 24 hours.
+
+## Agent Guidance
+
+- First ask the user which machine should run the generated session script.
+- Do not invent session IDs; use the UUID printed by the agent or the `X-Session-Id` header.
+- Prefer raw text `/send` bodies for simple commands.
+- Use JSON `/send` only for `cwd` or timeout control.
+- Keep commands explicit and reversible.
+- End sessions with `/end` when finished.
+- Do not depend on undocumented response JSON.
+
+## Source
+
+- Repository: `https://github.com/Stoffberg/shell-over-edge`
+- README: `https://github.com/Stoffberg/shell-over-edge/blob/main/README.md`
+- Agent skill: `https://raw.githubusercontent.com/Stoffberg/shell-over-edge/main/skills/shell-over-edge/SKILL.md`

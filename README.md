@@ -10,6 +10,13 @@ Production: [https://soe.stoff.dev](https://soe.stoff.dev)
 
 Short name: `soe`.
 
+## Agent Resources
+
+- Compact agent reference: [`llms.txt`](llms.txt)
+- Reusable agent skill: [`skills/shell-over-edge/SKILL.md`](skills/shell-over-edge/SKILL.md)
+- Raw `llms.txt`: [`raw.githubusercontent.com/Stoffberg/shell-over-edge/main/llms.txt`](https://raw.githubusercontent.com/Stoffberg/shell-over-edge/main/llms.txt)
+- Raw skill: [`raw.githubusercontent.com/Stoffberg/shell-over-edge/main/skills/shell-over-edge/SKILL.md`](https://raw.githubusercontent.com/Stoffberg/shell-over-edge/main/skills/shell-over-edge/SKILL.md)
+
 ## API
 
 Create a POSIX shell session:
