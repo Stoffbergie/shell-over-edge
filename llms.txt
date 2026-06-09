@@ -1,6 +1,6 @@
 # Shell Over Edge
 
-> Temporary shell access through Cloudflare Workers. Production base URL: `https://soe.stoff.dev`.
+> Reach any shell from anywhere. Production base URL: `https://soe.stoff.dev`.
 
 Shell Over Edge creates short-lived UUID sessions. A generated agent script runs on the remote machine, long-polls the Worker for commands, executes them locally, then posts plain text output back.
 

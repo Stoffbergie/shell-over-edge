@@ -1,11 +1,11 @@
 ---
 name: shell-over-edge
-description: Use Shell Over Edge to create a temporary remote shell session through Cloudflare Workers, send commands, and close the session safely.
+description: Use Shell Over Edge to reach a shell from anywhere over HTTPS, send commands, and close the session safely.
 ---
 
 # Shell Over Edge
 
-Use this skill when a user wants temporary shell access to a machine through `https://soe.stoff.dev`.
+Use this skill when a user wants shell access to another machine through `https://soe.stoff.dev`.
 
 ## Core Model
 

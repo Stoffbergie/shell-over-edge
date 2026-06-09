@@ -44,5 +44,5 @@
     "url": "https://github.com/Stoffberg/shell-over-edge/issues"
   },
   "license": "MIT",
-  "description": "Temporary shell access through Cloudflare Workers."
+  "description": "Reach any shell from anywhere."
 }
