@@ -255,3 +255,5 @@ Optional Cloudflare TURN secrets:
 - `TURN_KEY_ID`
 - `TURN_KEY_API_TOKEN`
 - `TURN_CREDENTIAL_TTL_SECONDS`
+
+GitHub releases attach native agent binaries named for the bootstrap download path, for example `soe-agent-aarch64-linux-musl` and `soe-agent-x86_64-windows.exe`.

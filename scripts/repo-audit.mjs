@@ -92,6 +92,13 @@ async function main() {
     if (!wrangler.includes(value)) failures.push(`wrangler.toml missing ${value}`);
   }
 
+  const release = await readText(join(root, ".github/workflows/release.yml"));
+  if (!release.includes("mlugg/setup-zig@v2")) failures.push("release workflow must install Zig");
+  if (!release.includes("soe-agent-x86_64-linux-musl")) failures.push("release workflow must build native Linux assets");
+  if (!release.includes("soe-agent-aarch64-macos")) failures.push("release workflow must build native macOS assets");
+  if (!release.includes("soe-agent-x86_64-windows.exe")) failures.push("release workflow must build native Windows assets");
+  if (!release.includes("files: dist/native/*")) failures.push("release workflow must upload native assets");
+
   const readme = await readText(join(root, "README.md"));
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
   if (!readme.includes("Reach any shell from anywhere.")) failures.push("README one-liner is wrong");
