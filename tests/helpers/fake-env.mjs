@@ -123,11 +123,14 @@ class FakeSessionBridge {
   queued = [];
   nextWaiters = [];
   resultWaiters = new Map();
+  session = null;
 
   async fetch(request, init = {}) {
     const url = new URL(String(request));
     const method = init.method || "GET";
     const body = init.body instanceof ReadableStream ? await new Response(init.body).text() : init.body == null ? "" : String(init.body);
+    if (url.pathname === "/open") return this.open(body);
+    if (url.pathname === "/hello") return this.hello();
     if (url.pathname === "/send") return this.send(body);
     if (url.pathname === "/next") return this.next();
     if (url.pathname.startsWith("/result/")) return this.result(url.pathname.slice("/result/".length), url.searchParams.get("exit"), body);
@@ -135,7 +138,19 @@ class FakeSessionBridge {
     return new Response("Not found\n", { status: 404 });
   }
 
+  open(body) {
+    const payload = JSON.parse(body);
+    this.session = { expiresAt: Number(payload.expiresAt) };
+    return textResponse("opened\n");
+  }
+
+  hello() {
+    return this.requireOpen() || textResponse("connected\n");
+  }
+
   async send(body) {
+    const blocked = this.requireOpen();
+    if (blocked) return blocked;
     const payload = JSON.parse(body);
     const command = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -157,6 +172,8 @@ class FakeSessionBridge {
   }
 
   next() {
+    const blocked = this.requireOpen();
+    if (blocked) return blocked;
     const command = this.queued.shift();
     if (command) return commandResponse(command);
     return new Promise((resolve) => {
@@ -169,8 +186,10 @@ class FakeSessionBridge {
   }
 
   result(commandId, exit, body) {
+    const blocked = this.requireOpen();
+    if (blocked) return blocked;
     const waiter = this.resultWaiters.get(commandId);
-    if (!waiter) return new Response("Command not found\n", { status: 404 });
+    if (!waiter) return textResponse("Command not found\n", 404);
     const exitCode = Number(exit || "0");
     clearTimeout(waiter.timer);
     this.resultWaiters.delete(commandId);
@@ -183,22 +202,24 @@ class FakeSessionBridge {
         "X-Exit-Code": String(exitCode)
       }
     }));
-    return new Response("ok\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
+    return textResponse("ok\n");
   }
 
   end() {
+    if (!this.session) return textResponse("Session not found\n", 404);
+    this.session = { ...this.session, closed: true };
     for (const waiter of this.nextWaiters) {
       clearTimeout(waiter.timer);
-      waiter.resolve(new Response("Session ended\n", { status: 410 }));
+      waiter.resolve(textResponse("Session ended\n", 410));
     }
     for (const waiter of this.resultWaiters.values()) {
       clearTimeout(waiter.timer);
-      waiter.resolve(new Response("Session ended\n", { status: 410 }));
+      waiter.resolve(textResponse("Session ended\n", 410));
     }
     this.queued = [];
     this.nextWaiters = [];
     this.resultWaiters.clear();
-    return new Response("ended\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
+    return textResponse("ended\n");
   }
 
   dispatch(command) {
@@ -209,6 +230,16 @@ class FakeSessionBridge {
     }
     clearTimeout(waiter.timer);
     waiter.resolve(commandResponse(command));
+  }
+
+  requireOpen() {
+    if (!this.session) return textResponse("Session not found\n", 404);
+    if (this.session.closed) return textResponse("Session ended\n", 410);
+    if (Date.now() >= this.session.expiresAt) {
+      this.session = { ...this.session, closed: true };
+      return textResponse("Session expired\n", 410);
+    }
+    return null;
   }
 }
 
@@ -222,4 +253,14 @@ function commandResponse(command) {
   });
   if (command.cwd) headers.set("X-Command-Cwd-Base64", Buffer.from(command.cwd).toString("base64"));
   return new Response(command.body, { headers });
+}
+
+function textResponse(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "text/plain; charset=utf-8"
+    }
+  });
 }

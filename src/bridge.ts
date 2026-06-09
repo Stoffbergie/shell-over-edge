@@ -13,6 +13,11 @@ type BridgeCommand = {
   timeoutSeconds: number;
 };
 
+type BridgeSession = {
+  expiresAt: number;
+  closed?: boolean;
+};
+
 type CommandPayload = {
   body?: unknown;
   cwd?: unknown;
@@ -32,6 +37,8 @@ export class CommandBridge extends DurableObject<Env> {
   private queued: BridgeCommand[] = [];
   private nextWaiters: ResponseWaiter[] = [];
   private resultWaiters = new Map<string, ResponseWaiter>();
+  private session?: BridgeSession | null;
+  private sessionLoad?: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -39,6 +46,8 @@ export class CommandBridge extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/open") return this.openSession(request);
+    if (url.pathname === "/hello") return this.hello();
     if (url.pathname === "/send") return this.sendCommand(request);
     if (url.pathname === "/next") return this.nextCommand(request);
     if (url.pathname.startsWith("/result/")) return this.receiveResult(request, cleanString(url.pathname.slice("/result/".length), 200));
@@ -46,7 +55,24 @@ export class CommandBridge extends DurableObject<Env> {
     return textResponse("Not found\n", 404);
   }
 
+  private async openSession(request: Request): Promise<Response> {
+    const payload = await request.json().catch(() => ({})) as { expiresAt?: unknown };
+    const expiresAt = Number(payload.expiresAt);
+    if (!Number.isFinite(expiresAt)) return textResponse("Session not found\n", 404);
+    this.session = { expiresAt };
+    await this.ctx.storage.put("session", this.session);
+    return textResponse("opened\n");
+  }
+
+  private async hello(): Promise<Response> {
+    const blocked = await this.requireOpenSession();
+    return blocked || textResponse("connected\n");
+  }
+
   private async sendCommand(request: Request): Promise<Response> {
+    const blocked = await this.requireOpenSession();
+    if (blocked) return blocked;
+
     const payload = await request.json().catch(() => ({})) as CommandPayload;
     const body = cleanString(payload.body, maxCommandBytes).trim();
     if (!body) return textResponse("Command body is required\n", 400);
@@ -75,7 +101,10 @@ export class CommandBridge extends DurableObject<Env> {
     return response;
   }
 
-  private nextCommand(request: Request): Response | Promise<Response> {
+  private async nextCommand(request: Request): Promise<Response> {
+    const blocked = await this.requireOpenSession();
+    if (blocked) return blocked;
+
     const command = this.queued.shift();
     if (command) return commandResponse(command);
 
@@ -95,6 +124,9 @@ export class CommandBridge extends DurableObject<Env> {
   }
 
   private async receiveResult(request: Request, commandId: string): Promise<Response> {
+    const blocked = await this.requireOpenSession();
+    if (blocked) return blocked;
+
     const waiter = this.resultWaiters.get(commandId);
     if (!waiter) return textResponse("Command not found\n", 404);
 
@@ -115,18 +147,12 @@ export class CommandBridge extends DurableObject<Env> {
     return textResponse("ok\n");
   }
 
-  private endSession(): Response {
-    for (const waiter of this.nextWaiters) {
-      clearTimeout(waiter.timer);
-      waiter.resolve(textResponse("Session ended\n", 410));
-    }
-    for (const waiter of this.resultWaiters.values()) {
-      clearTimeout(waiter.timer);
-      waiter.resolve(textResponse("Session ended\n", 410));
-    }
-    this.nextWaiters = [];
-    this.resultWaiters.clear();
-    this.queued = [];
+  private async endSession(): Promise<Response> {
+    await this.loadSession();
+    if (!this.session) return textResponse("Session not found\n", 404);
+    this.session = { ...this.session, closed: true };
+    await this.ctx.storage.put("session", this.session);
+    this.closeWaiters("Session ended\n", 410);
     return textResponse("ended\n");
   }
 
@@ -142,6 +168,42 @@ export class CommandBridge extends DurableObject<Env> {
 
   private removeQueued(commandId: string): void {
     this.queued = this.queued.filter((command) => command.id !== commandId);
+  }
+
+  private async requireOpenSession(): Promise<Response | null> {
+    await this.loadSession();
+    if (!this.session) return textResponse("Session not found\n", 404);
+    if (this.session.closed) return textResponse("Session ended\n", 410);
+    if (Date.now() >= this.session.expiresAt) {
+      this.session = { ...this.session, closed: true };
+      await this.ctx.storage.put("session", this.session);
+      this.closeWaiters("Session expired\n", 410);
+      return textResponse("Session expired\n", 410);
+    }
+    return null;
+  }
+
+  private async loadSession(): Promise<void> {
+    if (this.session !== undefined) return;
+    this.sessionLoad ||= this.ctx.storage.get<BridgeSession>("session").then((session) => {
+      this.session = session || null;
+    });
+    await this.sessionLoad;
+  }
+
+  private closeWaiters(message: string, status: number): void {
+    const response = () => textResponse(message, status);
+    for (const waiter of this.nextWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(response());
+    }
+    for (const waiter of this.resultWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(response());
+    }
+    this.nextWaiters = [];
+    this.resultWaiters.clear();
+    this.queued = [];
   }
 }
 
