@@ -16,7 +16,7 @@ const meta: SessionMeta = {
   expiresAt: Date.UTC(2030, 0, 1)
 };
 
-const sh = findCommand("sh");
+const unixShells = uniqueCommands(["sh", "dash", "bash", "zsh"]);
 const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershell.exe", "powershell"] : ["pwsh"]);
 
 test("generated shell agent is portable across common Unix environments", () => {
@@ -45,8 +45,9 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.ok(!script.includes("RTCPeerConnection"));
 });
 
-test.skipIf(!sh)("generated shell agent is POSIX syntax-valid", async () => {
-  await assertShellSyntax(sh, shellAgentScript("https://soe.test", meta));
+test.skipIf(unixShells.length === 0)("generated shell agent is syntax-valid across available Unix shells", async () => {
+  const script = shellAgentScript("https://soe.test", meta);
+  for (const shell of unixShells) await assertShellSyntax(shell, script);
 });
 
 test("generated PowerShell agent keeps Windows request fallbacks", () => {
@@ -57,6 +58,10 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   assert.match(script, /System\.Net\.WebRequest/);
   assert.match(script, /Get-ResponseHeader/);
   assert.match(script, /InnerException\.Response/);
+  assert.match(script, /Start-ThreadJob/);
+  assert.match(script, /Start-Job/);
+  assert.match(script, /X-Command-Timeout/);
+  assert.match(script, /Command timed out after \$TimeoutSeconds seconds/);
   assert.match(script, /\$StatusCode -eq 204/);
   assert.ok(!script.includes("Start-Sleep -Seconds 2"));
   assert.match(script, /api\/sessions\/\$SessionId\/hello/);
@@ -95,4 +100,8 @@ async function assertPowerShellParses(powerShell: string, script: string): Promi
   await rm(dir, { force: true, recursive: true });
   assert.equal(result.error, undefined, result.error?.message || result.stderr);
   assert.equal(result.status, 0, result.stderr);
+}
+
+function uniqueCommands(names: string[]): string[] {
+  return [...new Set(names.map((name) => findCommand(name)).filter(Boolean))];
 }

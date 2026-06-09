@@ -95,19 +95,54 @@ function Send-Bye {
   try { Invoke-AgentRequest -Method Post -Path "/api/sessions/$SessionId/end" | Out-Null } catch {}
 }
 
-function Run-Command([string]$CommandBody, [string]$Cwd, [string]$ResultFile) {
-  $Previous = Get-Location
+function Start-CommandJob([string]$CommandBody, [string]$Cwd) {
+  $Block = {
+    param([string]$CommandBody, [string]$Cwd)
+    try {
+      if ($Cwd) {
+        if (!(Test-Path -LiteralPath $Cwd -PathType Container)) {
+          [pscustomobject]@{ ExitCode = 1; Output = "Working directory does not exist: $Cwd\`n" }
+          return
+        }
+        Set-Location -LiteralPath $Cwd
+      }
+      $global:LASTEXITCODE = $null
+      $Output = & ([scriptblock]::Create($CommandBody)) *>&1 | Out-String
+      $ExitCode = if ($null -ne $global:LASTEXITCODE) { [int]$global:LASTEXITCODE } else { 0 }
+      [pscustomobject]@{ ExitCode = $ExitCode; Output = $Output }
+    } catch {
+      [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
+    }
+  }
+  if (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue) {
+    return Start-ThreadJob -ScriptBlock $Block -ArgumentList $CommandBody, $Cwd
+  }
+  return Start-Job -ScriptBlock $Block -ArgumentList $CommandBody, $Cwd
+}
+
+function Run-Command([string]$CommandBody, [string]$Cwd, [string]$ResultFile, [int]$TimeoutSeconds) {
+  if ($TimeoutSeconds -lt 1) { $TimeoutSeconds = 900 }
+  $Job = $null
   try {
-    if ($Cwd) { Set-Location $Cwd }
-    $Output = & ([scriptblock]::Create($CommandBody)) *>&1 | Out-String
-    $ExitCode = if ($null -ne $global:LASTEXITCODE) { [int]$global:LASTEXITCODE } else { 0 }
-    [IO.File]::WriteAllText($ResultFile, $Output)
-    return $ExitCode
+    $Job = Start-CommandJob -CommandBody $CommandBody -Cwd $Cwd
+    if (Wait-Job $Job -Timeout $TimeoutSeconds) {
+      $Results = @(Receive-Job $Job)
+      $Result = $Results | Select-Object -Last 1
+      if (!$Result) {
+        [IO.File]::WriteAllText($ResultFile, "")
+        return 0
+      }
+      [IO.File]::WriteAllText($ResultFile, [string]$Result.Output)
+      return [int]$Result.ExitCode
+    }
+    Stop-Job $Job -ErrorAction SilentlyContinue
+    [IO.File]::WriteAllText($ResultFile, "Command timed out after $TimeoutSeconds seconds\`n")
+    return 124
   } catch {
     [IO.File]::WriteAllText($ResultFile, $_.Exception.Message)
     return 1
   } finally {
-    Set-Location $Previous
+    if ($Job) { Remove-Job $Job -ErrorAction SilentlyContinue }
   }
 }
 
@@ -148,7 +183,9 @@ try {
     }
     $CommandId = Get-ResponseHeader $Response "X-Command-Id"
     $Cwd = Decode-Base64Text (Get-ResponseHeader $Response "X-Command-Cwd-Base64")
-    $ExitCode = Run-Command -CommandBody (Get-Content $BodyFile -Raw) -Cwd $Cwd -ResultFile $ResultFile
+    $TimeoutSeconds = [int](Get-ResponseHeader $Response "X-Command-Timeout")
+    if ($TimeoutSeconds -lt 1) { $TimeoutSeconds = 900 }
+    $ExitCode = Run-Command -CommandBody (Get-Content $BodyFile -Raw) -Cwd $Cwd -ResultFile $ResultFile -TimeoutSeconds $TimeoutSeconds
     Invoke-AgentRequest -Method Post -Path "/api/sessions/$SessionId/result/\${CommandId}?exit=$ExitCode" -Body ([IO.File]::ReadAllBytes($ResultFile)) -ContentType "application/octet-stream" | Out-Null
     Remove-Item $BodyFile, $ResultFile -Force
   }
