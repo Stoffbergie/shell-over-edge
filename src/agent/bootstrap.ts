@@ -85,7 +85,7 @@ SOE_NO_END_ON_EXIT=1 sh "$AGENT_FILE" &
 AGENT_PID=$!
 
 while kill -0 "$AGENT_PID" 2>/dev/null; do
-  if [ -x "$NATIVE_FILE" ]; then
+  if [ "\${SOE_AUTO_UPGRADE:-}" = "1" ] && [ -x "$NATIVE_FILE" ]; then
     kill "$AGENT_PID" 2>/dev/null || true
     wait "$AGENT_PID" 2>/dev/null || true
     UPGRADED=1
@@ -158,7 +158,7 @@ try {
   $Agent = Start-Process -FilePath $HostExe -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $AgentPath) -PassThru
 
   while ($Agent -and !$Agent.HasExited) {
-    if (Test-Path $NativePath) {
+    if ($env:SOE_AUTO_UPGRADE -eq "1" -and (Test-Path $NativePath)) {
       Stop-RelayAgent
       $Upgraded = $true
       & $NativePath --base-url $BaseUrl --session $SessionId

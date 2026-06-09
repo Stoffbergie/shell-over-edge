@@ -90,6 +90,7 @@ test.skipIf(!powerShell)("generated PowerShell agent parses", async () => {
 test.skipIf(unixShells.length === 0)("generated POSIX bootstrap is syntax-valid across available Unix shells", async () => {
   const script = shellBootstrapScript("https://soe.test");
   assert.match(script, /SOE_NATIVE_BASE_URL/);
+  assert.match(script, /SOE_AUTO_UPGRADE/);
   assert.match(script, /SOE_NO_END_ON_EXIT=1 sh "\$AGENT_FILE"/);
   assert.match(script, /exec "\$NATIVE_FILE" --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
   for (const shell of unixShells) await assertShellSyntax(shell, script);
@@ -98,6 +99,7 @@ test.skipIf(unixShells.length === 0)("generated POSIX bootstrap is syntax-valid 
 test.skipIf(!powerShell)("generated PowerShell bootstrap parses", async () => {
   const script = powerShellBootstrapScript("https://soe.test");
   assert.match(script, /SOE_NATIVE_BASE_URL/);
+  assert.match(script, /SOE_AUTO_UPGRADE/);
   assert.match(script, /\$env:SOE_NO_END_ON_EXIT = "1"/);
   assert.match(script, /--base-url \$BaseUrl --session \$SessionId/);
   await assertPowerShellParses(powerShell, script);

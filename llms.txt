@@ -2,7 +2,7 @@
 
 > Reach any shell from anywhere. Production base URL: `https://soe.stoff.dev`.
 
-Shell Over Edge creates short-lived 8-character session codes. A bootstrap starts a generated relay agent immediately and may upgrade to a native agent when one is available. The agent long-polls the Worker for commands, executes them locally, then posts plain text output back.
+Shell Over Edge creates short-lived 8-character session codes. A bootstrap starts a generated relay agent immediately and can warm a native agent download in the background. The agent long-polls the Worker for commands, executes them locally, then posts plain text output back.
 
 ## Public API
 

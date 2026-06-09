@@ -9,7 +9,7 @@ Use this skill when a user wants shell access to another machine through `https:
 
 ## Core Model
 
-Shell Over Edge uses an 8-character session code as the capability. The remote machine runs a bootstrap that starts the relay agent immediately and may upgrade to a native agent when one is available. The helper sends commands to `/send`; the agent executes them locally and returns plain text output.
+Shell Over Edge uses an 8-character session code as the capability. The remote machine runs a bootstrap that starts the relay agent immediately and can warm a native agent download in the background. The helper sends commands to `/send`; the agent executes them locally and returns plain text output.
 
 Current API:
 

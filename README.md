@@ -24,7 +24,7 @@ sequenceDiagram
     Helper->>Worker: POST /api/sessions
     Worker-->>Helper: relay agent script + X-Session-Id
 
-    Note over Agent: relay starts immediately; native download can race in background
+    Note over Agent: relay starts immediately; native download can warm in background
     Agent->>Worker: POST /api/sessions/:id/hello
     Agent->>Worker: GET /api/sessions/:id/next
     Worker->>Bridge: wait for command
@@ -182,7 +182,7 @@ src/
     services/session-bridge.ts      Durable Object lookup boundary
     services/session-store.ts       R2 session metadata and cleanup
   agent/
-    bootstrap.ts                    Tiny bootstrap scripts with native upgrade race
+    bootstrap.ts                    Tiny bootstrap scripts with native download warmup
     shell.ts                        Generated POSIX agent
     powershell.ts                   Generated PowerShell agent
     terminal-usage.ts               Root terminal usage text
