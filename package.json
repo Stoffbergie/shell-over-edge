@@ -27,7 +27,8 @@
     "native:build": "zig build --release=small",
     "test:native": "pnpm run native:build && vitest run tests/e2e/native-agent.test.ts",
     "test:containers": "pnpm run native:build:linux && SOE_DOCKER_E2E=1 vitest run tests/e2e/linux-container-agent.test.ts tests/e2e/native-linux-container-agent.test.ts",
-    "native:build:linux": "node scripts/build-native-linux.mjs"
+    "native:build:linux": "node scripts/build-native-linux.mjs",
+    "benchmark": "node scripts/benchmark.mjs"
   },
   "packageManager": "pnpm@11.5.2",
   "dependencies": {

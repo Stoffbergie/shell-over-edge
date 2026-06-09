@@ -91,6 +91,8 @@ test.skipIf(unixShells.length === 0)("generated POSIX bootstrap is syntax-valid 
   const script = shellBootstrapScript("https://soe.test");
   assert.match(script, /SOE_NATIVE_BASE_URL/);
   assert.match(script, /SOE_AUTO_UPGRADE/);
+  assert.match(script, /SOE_WARM_NATIVE/);
+  assert.ok(script.includes('if [ "${SOE_AUTO_UPGRADE:-}" = "1" ] || [ "${SOE_WARM_NATIVE:-}" = "1" ] || [ -n "${SOE_NATIVE_URL:-}" ]; then'));
   assert.match(script, /SOE_NO_END_ON_EXIT=1 sh "\$AGENT_FILE"/);
   assert.match(script, /exec "\$NATIVE_FILE" --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
   for (const shell of unixShells) await assertShellSyntax(shell, script);
@@ -100,6 +102,8 @@ test.skipIf(!powerShell)("generated PowerShell bootstrap parses", async () => {
   const script = powerShellBootstrapScript("https://soe.test");
   assert.match(script, /SOE_NATIVE_BASE_URL/);
   assert.match(script, /SOE_AUTO_UPGRADE/);
+  assert.match(script, /SOE_WARM_NATIVE/);
+  assert.ok(script.includes('if ($env:SOE_AUTO_UPGRADE -eq "1" -or $env:SOE_WARM_NATIVE -eq "1" -or $env:SOE_NATIVE_URL)'));
   assert.match(script, /\$env:SOE_NO_END_ON_EXIT = "1"/);
   assert.match(script, /--base-url \$BaseUrl --session \$SessionId/);
   await assertPowerShellParses(powerShell, script);

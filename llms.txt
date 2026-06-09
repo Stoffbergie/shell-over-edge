@@ -68,6 +68,7 @@ Direct command endpoints should accept the same JSON command payload and return 
 - Sessions are short code capabilities.
 - The response header `X-Session-Id` contains the code for newly created sessions.
 - Generated agents print the code and copy it to the clipboard when possible.
+- The bootstrap only downloads native binaries when `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, or `SOE_NATIVE_URL` is set.
 - Most responses are plain text by design.
 - No bearer tokens, helper tokens, agent tokens, URL tokens, or auth headers are used in the current API.
 - Generated curl-first agents do not open inbound direct listeners by default.

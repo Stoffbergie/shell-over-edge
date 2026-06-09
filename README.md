@@ -64,6 +64,8 @@ irm https://soe.stoff.dev/a.ps1 | iex
 
 The agent prints the session code and copies it to the clipboard when possible. The create response also returns it in `X-Session-Id`.
 
+The bootstrap starts the HTTPS relay first. It only downloads a native binary when `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, or `SOE_NATIVE_URL` is set.
+
 Send a command:
 
 ```sh
@@ -235,6 +237,23 @@ Linux container agent e2e, requiring Docker:
 ```sh
 pnpm run test:containers
 ```
+
+Production benchmark:
+
+```sh
+pnpm run benchmark -- --runs=7 --burst=32
+```
+
+Reference run from this machine to `https://soe.stoff.dev` on June 10, 2026:
+
+| Metric | p50 | p95 |
+| --- | ---: | ---: |
+| `GET /` | 11.7 ms | 37.7 ms |
+| `GET /a` | 12.9 ms | 44.3 ms |
+| `POST /api/sessions` | 932.8 ms | 994.1 ms |
+| relay command round trip | 1081.7 ms | 1155.5 ms |
+
+The same run processed 32 queued relay commands in 10066.4 ms from a single agent loop. Response sizes were 362 bytes for `/`, 2523 bytes for `/a`, 2741 bytes for `/a.ps1`, and 3532 bytes for a generated POSIX relay agent.
 
 ## Cloudflare
 

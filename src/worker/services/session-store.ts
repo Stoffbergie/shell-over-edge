@@ -2,6 +2,14 @@ import type { SessionMeta } from "../../domain/session";
 import { cleanupRetentionMs } from "../../shared/config";
 import type { Env } from "../env";
 
+type SessionCodeRecord = {
+  id?: unknown;
+};
+
+const codeCacheTtlMs = 5 * 60 * 1000;
+const maxCodeCacheEntries = 4096;
+const codeCache = new Map<string, { id: string; expiresAt: number }>();
+
 export async function expireIfNeeded(env: Env, meta: SessionMeta): Promise<SessionMeta> {
   if (Date.now() < meta.expiresAt || meta.status === "ended" || meta.status === "expired") return meta;
   const expired = { ...meta, status: "expired" as const };
@@ -18,9 +26,29 @@ export async function cleanupExpiredSessions(env: Env): Promise<void> {
     }
     if (now >= meta.expiresAt + cleanupRetentionMs) {
       await deletePrefix(env, `sessions/${meta.id}/`);
-      if (meta.code) await env.SOE_MAILBOX.delete(codeKey(meta.code));
+      if (meta.code) {
+        await env.SOE_MAILBOX.delete(codeKey(meta.code));
+        codeCache.delete(meta.code);
+      }
     }
   }
+}
+
+export async function putSessionCode(env: Env, code: string, id: string): Promise<void> {
+  await putJson(env, codeKey(code), { id });
+  rememberCode(code, id);
+}
+
+export async function resolveSessionCode(env: Env, code: string): Promise<string> {
+  const now = Date.now();
+  const cached = codeCache.get(code);
+  if (cached && cached.expiresAt > now) return cached.id;
+  if (cached) codeCache.delete(code);
+
+  const record = await getJson<SessionCodeRecord>(env, codeKey(code));
+  const id = typeof record?.id === "string" ? record.id : "";
+  if (id) rememberCode(code, id);
+  return id;
 }
 
 async function deletePrefix(env: Env, prefix: string): Promise<void> {
@@ -66,4 +94,12 @@ export function metaKey(id: string): string {
 
 export function codeKey(code: string): string {
   return `codes/${code}.json`;
+}
+
+function rememberCode(code: string, id: string): void {
+  codeCache.set(code, { id, expiresAt: Date.now() + codeCacheTtlMs });
+  for (const key of codeCache.keys()) {
+    if (codeCache.size <= maxCodeCacheEntries) break;
+    codeCache.delete(key);
+  }
 }

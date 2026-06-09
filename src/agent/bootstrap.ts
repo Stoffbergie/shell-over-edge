@@ -80,7 +80,9 @@ if [ -z "$SESSION_ID" ]; then
 fi
 
 chmod +x "$AGENT_FILE"
-(download_native) &
+if [ "\${SOE_AUTO_UPGRADE:-}" = "1" ] || [ "\${SOE_WARM_NATIVE:-}" = "1" ] || [ -n "\${SOE_NATIVE_URL:-}" ]; then
+  (download_native) &
+fi
 SOE_NO_END_ON_EXIT=1 sh "$AGENT_FILE" &
 AGENT_PID=$!
 
@@ -152,7 +154,9 @@ try {
   $SessionId = [string]$Response.Headers["X-Session-Id"]
   if ([string]::IsNullOrWhiteSpace($SessionId)) { throw "Could not read session id" }
 
-  Start-NativeDownload
+  if ($env:SOE_AUTO_UPGRADE -eq "1" -or $env:SOE_WARM_NATIVE -eq "1" -or $env:SOE_NATIVE_URL) {
+    Start-NativeDownload
+  }
   $env:SOE_NO_END_ON_EXIT = "1"
   $HostExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell.exe" }
   $Agent = Start-Process -FilePath $HostExe -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $AgentPath) -PassThru

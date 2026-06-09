@@ -108,11 +108,13 @@ const bootstrap = await request("/a");
 assert(bootstrap.response.ok, `GET /a returned ${bootstrap.response.status}: ${bootstrap.text}`);
 assert(bootstrap.text.includes("SOE_NO_END_ON_EXIT=1 sh \"$AGENT_FILE\""), "POSIX bootstrap does not start relay with upgrade-safe mode");
 assert(bootstrap.text.includes("download_native"), "POSIX bootstrap does not include native download path");
+assert(bootstrap.text.includes("SOE_WARM_NATIVE"), "POSIX bootstrap does not gate native warmup");
 
 const psBootstrap = await request("/a.ps1");
 assert(psBootstrap.response.ok, `GET /a.ps1 returned ${psBootstrap.response.status}: ${psBootstrap.text}`);
 assert(psBootstrap.text.includes("$env:SOE_NO_END_ON_EXIT = \"1\""), "PowerShell bootstrap does not start relay with upgrade-safe mode");
 assert(psBootstrap.text.includes("Start-NativeDownload"), "PowerShell bootstrap does not include native download path");
+assert(psBootstrap.text.includes("SOE_WARM_NATIVE"), "PowerShell bootstrap does not gate native warmup");
 
 const session = await request("/api/sessions", {
   method: "POST"

@@ -23,6 +23,10 @@ const targets = [
     image: "alpine:3.20"
   },
   {
+    name: "Debian 12",
+    image: "debian:12-slim"
+  },
+  {
     name: "Ubuntu 22.04",
     image: "ubuntu:22.04"
   }
