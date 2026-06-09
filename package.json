@@ -22,7 +22,8 @@
     "smoke:prod": "node scripts/smoke-prod.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck:test": "tsc -p tsconfig.test.json --noEmit"
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "test:load": "vitest run tests/e2e/relay-load.test.ts tests/e2e/agent-script.test.ts tests/e2e/direct-upgrade.test.ts"
   },
   "packageManager": "pnpm@11.5.2",
   "dependencies": {

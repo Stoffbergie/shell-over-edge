@@ -9,6 +9,9 @@ Shell Over Edge creates short-lived UUID sessions. A generated agent script runs
 - Create POSIX session: `POST /api/sessions`
 - Create PowerShell session: `POST /api/sessions.ps1`
 - Send command: `POST /api/sessions/<uuid>/send`
+- Publish direct candidate: `POST /api/sessions/<uuid>/candidates`
+- List direct candidates: `GET /api/sessions/<uuid>/candidates?role=agent`
+- Report direct attempt: `POST /api/sessions/<uuid>/direct-attempts`
 - End session: `POST /api/sessions/<uuid>/end`
 
 ## Quick Use
@@ -37,6 +40,18 @@ Use JSON only when setting options:
 
 `timeout` is also accepted. Timeouts are clamped to 1-3600 seconds. The synchronous `/send` waits up to the platform-safe bridge wait and returns `504` if no result arrives.
 
+## Direct Upgrade
+
+The relay route is the universal fallback. Rich helpers can use the public service as rendezvous: publish short-lived `http` candidates, list agent candidates, try a direct command POST with a small timeout, report the attempt, then fall back to `/send` if direct fails.
+
+Candidate payload:
+
+```json
+{"role":"agent","transport":"http","url":"http://127.0.0.1:9000/command","priority":1,"ttlSeconds":60}
+```
+
+Direct command endpoints should accept the same JSON command payload and return plain command output with `X-Exit-Code` when available.
+
 ## Invariants
 
 - Sessions are UUID capabilities.
@@ -44,9 +59,12 @@ Use JSON only when setting options:
 - Generated agents print the UUID and copy it to the clipboard when possible.
 - Most responses are plain text by design.
 - No bearer tokens, helper tokens, agent tokens, URL tokens, or auth headers are used in the current API.
+- Generated curl-first agents do not open inbound direct listeners by default.
 - Retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, and `/connect.sh` are invalid.
 - Command body limit: 64 KB.
 - Result body limit: 1 MB.
+- Direct candidate body limit: 4 KB.
+- Direct candidate TTL: 60 seconds by default, 120 seconds max.
 - Session TTL: 2 hours.
 - Expired session cleanup retention: 24 hours.
 

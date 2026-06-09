@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import { powerShellAgentScript } from "../../agent/powershell";
 import { shellAgentScript } from "../../agent/shell";
 import type { SessionMeta } from "../../domain/session";
-import { maxCommandBytes, sessionTtlMs } from "../../shared/config";
+import { maxCommandBytes, maxDirectCandidateBytes, sessionTtlMs } from "../../shared/config";
 import { BadRequestError, cleanString, normalizeTimeout, publicBaseUrl, readLimitedText, textResponse } from "../../shared/http";
 import { logInfo } from "../../shared/log";
 import type { Env } from "../env";
@@ -25,6 +25,9 @@ export function registerSessionRoutes(app: SessionApp): void {
   app.post("/api/sessions", (c) => createSession(c, "shell"));
   app.post("/api/sessions.ps1", (c) => createSession(c, "powershell"));
   app.post("/api/sessions/:id/send", sendCommand);
+  app.post("/api/sessions/:id/candidates", publishCandidate);
+  app.get("/api/sessions/:id/candidates", listCandidates);
+  app.post("/api/sessions/:id/direct-attempts", recordDirectAttempt);
   app.post("/api/sessions/:id/hello", agentHello);
   app.get("/api/sessions/:id/next", agentNext);
   app.post("/api/sessions/:id/result/:commandId", agentResult);
@@ -64,6 +67,42 @@ async function sendCommand(c: SessionContext): Promise<Response> {
   return sessionBridge(c.env, guard.meta.id).fetch("https://session/send", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+async function publishCandidate(c: SessionContext): Promise<Response> {
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
+
+  const body = await readLimitedText(c.req.raw, maxDirectCandidateBytes);
+  return sessionBridge(c.env, guard.meta.id).fetch("https://session/candidates", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body
+  });
+}
+
+async function listCandidates(c: SessionContext): Promise<Response> {
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
+
+  const url = new URL(c.req.url);
+  return sessionBridge(c.env, guard.meta.id).fetch(`https://session/candidates${url.search}`);
+}
+
+async function recordDirectAttempt(c: SessionContext): Promise<Response> {
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
+
+  const body = await readLimitedText(c.req.raw, 2000);
+  return sessionBridge(c.env, guard.meta.id).fetch("https://session/direct-attempts", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body
   });
 }
 

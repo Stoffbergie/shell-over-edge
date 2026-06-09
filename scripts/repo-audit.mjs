@@ -75,6 +75,7 @@ async function main() {
   if (pkg.homepage !== "https://soe.stoff.dev") failures.push("package.json homepage must be https://soe.stoff.dev");
   if (pkg.repository?.url !== "https://github.com/Stoffberg/shell-over-edge.git") failures.push("package.json repository URL is wrong");
   if (pkg.scripts?.test !== "vitest run") failures.push("package.json test script must use Vitest");
+  if (!pkg.scripts?.["test:load"]) failures.push("package.json missing test:load");
   if (!pkg.scripts?.["typecheck:test"]) failures.push("package.json missing typecheck:test");
   if (!pkg.devDependencies?.vitest) failures.push("package.json missing vitest");
 
@@ -87,6 +88,8 @@ async function main() {
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
   if (!readme.includes("Reach any shell from anywhere.")) failures.push("README one-liner is wrong");
   if (!readme.includes("```mermaid")) failures.push("README must include a Mermaid flow diagram");
+  if (!readme.includes("/api/sessions/<uuid>/candidates")) failures.push("README must document direct candidates");
+  if (!readme.includes("Direct Transport")) failures.push("README must document the direct transport tradeoff");
   if (!readme.includes("llms.txt")) failures.push("README must link llms.txt");
   if (!readme.includes("skills/shell-over-edge/SKILL.md")) failures.push("README must link the Shell Over Edge skill");
   if (readme.includes("Authorization: Bearer")) failures.push("README must not document retired bearer-token API");
@@ -95,11 +98,13 @@ async function main() {
   const llms = await readText(join(root, "llms.txt"));
   if (!llms.includes("POST /api/sessions")) failures.push("llms.txt must document session creation");
   if (!llms.includes("POST /api/sessions/<uuid>/send")) failures.push("llms.txt must document command send");
+  if (!llms.includes("POST /api/sessions/<uuid>/candidates")) failures.push("llms.txt must document direct candidates");
   if (llms.includes("Authorization: Bearer")) failures.push("llms.txt must not document retired bearer-token API");
 
   const skill = await readText(join(root, "skills/shell-over-edge/SKILL.md"));
   if (!skill.includes("name: shell-over-edge")) failures.push("Shell Over Edge skill missing name metadata");
   if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<uuid>/send")) failures.push("Shell Over Edge skill must document command send");
+  if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<uuid>/candidates")) failures.push("Shell Over Edge skill must document direct candidates");
   if (skill.includes("Authorization: Bearer")) failures.push("Shell Over Edge skill must not document retired bearer-token API");
 
   if (failures.length > 0) {

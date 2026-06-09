@@ -35,11 +35,16 @@ sequenceDiagram
     Worker->>Bridge: resolve waiter
     Bridge-->>Helper: plain command output
 
+    Agent->>Worker: POST /api/sessions/:id/candidates
+    Helper->>Worker: GET /api/sessions/:id/candidates?role=agent
+    Helper->>Agent: optional direct command POST
+    Helper->>Worker: POST /api/sessions/:id/direct-attempts
+
     Helper->>Worker: POST /api/sessions/:id/end
     Worker->>Bridge: close waiters
 ```
 
-R2 stores session metadata. The Durable Object only coordinates the live command handoff.
+R2 stores session metadata. The Durable Object coordinates the live command handoff and direct rendezvous state.
 
 ## Quick Start
 
@@ -76,6 +81,9 @@ curl -sS -X POST https://soe.stoff.dev/api/sessions/<uuid>/end
 | `POST /api/sessions` | empty | POSIX shell agent script |
 | `POST /api/sessions.ps1` | empty | PowerShell agent script |
 | `POST /api/sessions/<uuid>/send` | raw text or JSON | plain command output |
+| `POST /api/sessions/<uuid>/candidates` | candidate JSON | candidate JSON |
+| `GET /api/sessions/<uuid>/candidates?role=agent` | empty | candidate list JSON |
+| `POST /api/sessions/<uuid>/direct-attempts` | attempt JSON | `ok` |
 | `POST /api/sessions/<uuid>/end` | empty | `ended` |
 
 For simple commands, send raw text:
@@ -95,6 +103,20 @@ Use JSON only when you need options:
 ```
 
 `timeout` is also accepted. Timeouts are clamped from 1 to 3600 seconds.
+
+## Direct Transport
+
+The relay path is the default because it works anywhere outbound HTTPS works.
+
+Clients that can run a richer helper may use the Worker as a rendezvous plane:
+
+1. the agent publishes short-lived direct candidates
+2. the helper fetches agent candidates
+3. the helper tries a direct command POST with a small timeout budget
+4. the helper reports the attempt result
+5. if direct fails, the helper falls back to `/send`
+
+The generated curl-first agents do not open inbound listeners by default. Real internet NAT traversal needs a client transport that can do candidate discovery and hole punching; this API keeps that path separate from the reliable relay fallback.
 
 ## Security Model
 
@@ -116,6 +138,8 @@ Treat a session UUID like a temporary password:
 | Cleanup retention | 24 hours after expiry |
 | Command body | 64 KB |
 | Result body | 1 MB |
+| Direct candidate body | 4 KB |
+| Direct candidate TTL | 60 seconds, max 120 seconds |
 | Timeout | 1 to 3600 seconds |
 
 ## Agent Resources
@@ -132,7 +156,7 @@ Treat a session UUID like a temporary password:
 - Durable Objects for live command coordination
 - R2 for session metadata and cleanup
 - TypeScript for the Worker and generated agent builders
-- Vitest for unit, integration, and generated-agent e2e tests
+- Vitest for unit, integration, generated-agent, and direct-upgrade e2e tests
 
 ## Repo Layout
 
@@ -151,11 +175,13 @@ src/
     powershell.ts                   Generated PowerShell agent
     terminal-usage.ts               Root terminal usage text
   domain/session.ts                 Session domain types
+  domain/direct.ts                  Direct transport candidate types
+  client/direct-send.ts             Direct upgrade helper with relay fallback
   shared/                           Small generic utilities
 tests/
   unit/                             Pure utilities and generated script checks
   integration/                      Worker request/response flows with fake bindings
-  e2e/                              Generated agent scripts against a local HTTP server
+  e2e/                              Generated agent and direct-upgrade flows
   helpers/                          Typed test harnesses
 scripts/
   repo-audit.mjs                    Repo hygiene checks
@@ -176,6 +202,12 @@ pnpm run validate
 ```
 
 That runs source typechecking, test typechecking, Vitest, repo audit, and a Wrangler dry run.
+
+Relay/direct load e2e:
+
+```sh
+pnpm run test:load
+```
 
 ## Cloudflare
 
