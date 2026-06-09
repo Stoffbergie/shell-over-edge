@@ -54,6 +54,7 @@ test("generated PowerShell agent parses and keeps Windows request fallbacks", as
   assert.match(script, /Get-ResponseHeader/);
   assert.match(script, /InnerException\.Response/);
   assert.match(script, /\$StatusCode -eq 204/);
+  assert.ok(!script.includes("Start-Sleep -Seconds 2"));
   assert.match(script, /api\/sessions\/\$SessionId\/hello/);
   assert.match(script, /api\/sessions\/\$SessionId\/next/);
   assert.match(script, /api\/sessions\/\$SessionId\/result\/\$\{CommandId\}\?exit=\$ExitCode/);

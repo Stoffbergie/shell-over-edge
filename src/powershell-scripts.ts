@@ -133,7 +133,6 @@ try {
     $StatusCode = [int]$Response.StatusCode
     if ($StatusCode -eq 204) {
       Remove-Item $BodyFile, $ResultFile -Force
-      Start-Sleep -Seconds 2
       continue
     }
     if ($StatusCode -eq 410 -or $StatusCode -eq 401 -or $StatusCode -eq 404) {
