@@ -92,6 +92,7 @@ export class TestExecutionContext {
 }
 
 export class MemoryR2Bucket {
+  gets = new Map<string, number>();
   objects = new Map<string, MemoryR2Object>();
 
   async put(key: string, value: ArrayBuffer | ArrayBufferView | string, options: { httpMetadata?: R2HTTPMetadata; customMetadata?: Record<string, string> } = {}): Promise<null> {
@@ -105,6 +106,7 @@ export class MemoryR2Bucket {
   }
 
   async get(key: string): Promise<MemoryR2Object | null> {
+    this.gets.set(key, (this.gets.get(key) || 0) + 1);
     return this.objects.get(key) || null;
   }
 

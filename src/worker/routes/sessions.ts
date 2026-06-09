@@ -14,7 +14,9 @@ import {
   expireIfNeeded,
   getJson,
   metaKey,
-  putJson
+  putJson,
+  putSessionCode,
+  resolveSessionCode
 } from "../services/session-store";
 
 type SessionApp = Hono<{ Bindings: Env }>;
@@ -50,7 +52,7 @@ async function createSession(c: SessionContext, kind: ScriptKind): Promise<Respo
     expiresAt: now + sessionTtlMs
   };
   await putJson(c.env, metaKey(id), meta);
-  await putJson(c.env, codeKey(code), { id });
+  await putSessionCode(c.env, code, id);
   logInfo("session_created", { sessionId: id, code, expiresAt: meta.expiresAt });
 
   const baseUrl = publicBaseUrl(c.req.raw, c.env);
@@ -174,8 +176,8 @@ async function resolveSessionId(env: Env, id: string | undefined): Promise<strin
   const value = cleanString(id, 80).toLowerCase();
   if (sessionIdPattern.test(value)) return value;
   if (!sessionCodePattern.test(value)) return "";
-  const record = await getJson<{ id?: unknown }>(env, codeKey(value));
-  return typeof record?.id === "string" && sessionIdPattern.test(record.id) ? record.id : "";
+  const sessionId = await resolveSessionCode(env, value);
+  return sessionIdPattern.test(sessionId) ? sessionId : "";
 }
 
 async function readCommandInput(request: Request): Promise<{ body: string; cwd: string; timeoutSeconds: number }> {
