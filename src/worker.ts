@@ -278,7 +278,9 @@ app.post("/api/v1/:code/bye", async (c) => {
 });
 
 app.post("/api/sessions", async (c) => {
-  await cleanupExpiredSessions(c.env);
+  c.executionCtx.waitUntil(cleanupExpiredSessions(c.env).catch((error) => {
+    logInfo("cleanup_failed", { error: error instanceof Error ? error.message : String(error) });
+  }));
   const payload = await readJson<{ helperName?: string }>(c.req.raw);
   const helperName = cleanString(payload.helperName, 80) || "Dirk";
   const helperToken = randomToken();
