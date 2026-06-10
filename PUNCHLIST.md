@@ -4,10 +4,6 @@ Ordered by impact on a five-minute senior-engineer review.
 
 ## Open
 
-- [ ] P2: Test the real Durable Object command bridge directly.
-  - Problem: integration/load tests exercise a duplicated fake bridge, so the production `CommandBridge` queue/result behavior can drift without a direct test failing.
-  - Proof required: direct bridge tests for queued sends, result matching, end behavior, and timeout edge cases; `pnpm run test`.
-
 - [ ] P3: Make the package scripts read like a production Worker.
   - Problem: `build` only runs TypeScript, while the real Worker bundle proof is `wrangler deploy --dry-run`. The root terminal usage also omits the close-session command.
   - Proof required: `pnpm run build`; local `pnpm run dev` root output includes start, send, and end.
@@ -29,3 +25,7 @@ Ordered by impact on a five-minute senior-engineer review.
 - [x] P2: Delete dead support code and template leftovers.
   - Fixed: removed the unused legacy bridge env/test option, deleted the unused JSON response helper and self-test, and reduced the pnpm workspace globs to the actual package.
   - Proof: no `rg` hits for the removed terms; `pnpm run validate`; `pnpm run build`; local `pnpm run dev` plus root curl.
+
+- [x] P2: Test the real Durable Object command bridge directly.
+  - Fixed: extracted the production queue/result implementation into `CommandBridgeCore`, kept the Durable Object as a thin adapter, and added direct tests for parallel result matching, `/end` waiter resolution, command timeout, and late-result acknowledgement.
+  - Proof: `pnpm exec vitest run tests/unit/command-bridge-core.test.ts`; `pnpm run validate` with 26 passing tests; `pnpm run build`; local `pnpm run dev` plus root curl.
