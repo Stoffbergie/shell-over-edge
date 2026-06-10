@@ -215,6 +215,10 @@ function Get-PrivateIps {
 
 function Get-ProbeJson {
   $NativeSupported = ![string]::IsNullOrWhiteSpace((Get-NativeName))
+  $CpuName = ""
+  $MemoryBytes = $null
+  try { $CpuName = (Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Name) } catch {}
+  try { $MemoryBytes = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory } catch {}
   $Payload = [ordered]@{
     session = $SessionId
     agent = [ordered]@{ kind = "powershell"; version = $AgentVersion; pid = $PID }
@@ -224,9 +228,9 @@ function Get-ProbeJson {
       arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
     }
     hardware = [ordered]@{
-      cpu = try { (Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Name) } catch { "" }
+      cpu = $CpuName
       cores = [Environment]::ProcessorCount
-      memoryBytes = try { (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory } catch { $null }
+      memoryBytes = $MemoryBytes
     }
     runtime = [ordered]@{
       shell = "powershell"
