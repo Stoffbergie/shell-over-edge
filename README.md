@@ -39,7 +39,7 @@ sequenceDiagram
     Helper->>Worker: POST /api/sessions/:id/config
     Worker->>Bridge: enqueue config and wait
     Bridge-->>Agent: requested transport
-    Agent->>Agent: download driver if needed
+    Agent->>Agent: download native or WebRTC driver if needed
     Agent-->>Worker: JSON active transport
     Worker-->>Helper: JSON active transport
 
@@ -52,9 +52,9 @@ sequenceDiagram
     Bridge-->>Helper: plain command output
 
     Helper->>Worker: GET /api/sessions/:id/ice
+    Helper->>Worker: POST /api/sessions/:id/signals
     Agent->>Worker: POST /api/sessions/:id/signals
-    Helper->>Worker: GET /api/sessions/:id/signals?role=agent
-    Helper->>Agent: optional direct command POST
+    Helper->>Agent: optional WebRTC DataChannel command
 
     Helper->>Worker: POST /api/sessions/:id/end
     Worker->>Bridge: close waiters
@@ -78,7 +78,7 @@ irm https://soe.stoff.dev/a.ps1 | iex
 
 The agent prints the session code and copies it to the clipboard when possible. The create response also returns it in `X-Session-Id`.
 
-The bootstrap starts the HTTPS relay first. It only downloads a native binary when `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, `SOE_NATIVE_URL` is set, or `/config` asks for a driver-backed transport.
+The bootstrap starts the HTTPS relay first. It only downloads a native binary when `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, `SOE_NATIVE_URL` is set, or `/config native` asks for it. `/config webrtc` downloads the `soe-webrtc` sidecar and keeps the relay agent alive as fallback.
 
 Send a command:
 
@@ -97,6 +97,12 @@ Ask the agent to upgrade:
 ```sh
 curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/config --data 'native'
 curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/config --data 'webrtc'
+```
+
+Send through the WebRTC sidecar when you have the helper binary:
+
+```sh
+soe-webrtc send --base-url https://soe.stoff.dev --session <code> --body 'pwd'
 ```
 
 End the session:
@@ -159,7 +165,7 @@ JSON is accepted when a client already works with structured payloads:
 {"transport":"webrtc"}
 ```
 
-Generated shell agents pick the right native binary for the OS and architecture, download it on demand, post the config result, then hand the same session to the native driver. If the requested transport cannot be activated, the response still names the active fallback so the helper can keep using `/send`.
+Generated shell agents pick the right driver for the OS and architecture. `native` downloads `soe-agent-*` and hands the same session to the native relay driver. `webrtc` downloads `soe-webrtc-*`, starts it beside the relay agent, and reports `active: "webrtc"` once the sidecar starts. If the requested transport cannot be activated, the response still names the active fallback so the helper can keep using `/send`.
 
 ## Direct Transport Internals
 
@@ -173,14 +179,14 @@ Clients that can run a richer helper may use the Worker as a rendezvous plane:
 | `POST /api/sessions/<code>/signals` | signal JSON | signal JSON |
 | `GET /api/sessions/<code>/signals?role=agent` | empty | signal list JSON |
 
-The direct upgrade is deliberately small:
+The WebRTC sidecar is deliberately separate from the tiny bootstrap:
 
 1. fetch ICE config when using WebRTC
 2. exchange short-lived direct signals
-3. try the direct stream with a small timeout budget
+3. open an RTCDataChannel between `soe-webrtc send` and the target sidecar
 4. if direct fails, fall back to `/send`
 
-The generated curl-first agents do not open inbound listeners by default. Real internet NAT traversal needs a client transport that can discover paths and hole punch; this API keeps that path separate from the reliable relay fallback.
+The generated curl-first agents do not open inbound listeners by default. WebRTC NAT traversal is handled by the on-demand `soe-webrtc` sidecar using `/ice` and `/signals` as the rendezvous plane.
 
 Without TURN secrets, `/ice` returns Cloudflare STUN only. With Cloudflare TURN configured, it returns short-lived TURN credentials generated server-side.
 
@@ -223,6 +229,7 @@ Treat a session code like a temporary password:
 - R2 for session metadata and cleanup
 - TypeScript for the Worker and generated agent builders
 - Zig for the optional native agent
+- Go and Pion for the optional WebRTC DataChannel sidecar
 - Vitest for unit, integration, generated-agent, native-agent, container, and direct-upgrade e2e tests
 
 ## Repo Layout
@@ -244,10 +251,13 @@ src/
     terminal-usage.ts               Root terminal usage text
 native/
   agent/main.zig                    Optional native relay agent
-  domain/session.ts                 Session domain types
-  domain/direct.ts                  Direct transport signal types
-  client/direct-send.ts             Direct upgrade helper with relay fallback
-  shared/                           Small generic utilities
+  webrtc/                           Optional WebRTC DataChannel sidecar
+domain/
+  session.ts                        Session domain types
+  direct.ts                         Direct transport signal types
+client/
+  direct-send.ts                    Direct upgrade helper with relay fallback
+shared/                             Small generic utilities
 tests/
   unit/                             Pure utilities and generated script checks
   integration/                      Worker request/response flows with fake bindings
@@ -284,6 +294,12 @@ Native agent e2e:
 
 ```sh
 pnpm run test:native
+```
+
+WebRTC sidecar e2e:
+
+```sh
+pnpm run test:webrtc
 ```
 
 Linux container agent e2e, requiring Docker:
@@ -329,4 +345,4 @@ Optional Cloudflare TURN secrets:
 - `TURN_KEY_API_TOKEN`
 - `TURN_CREDENTIAL_TTL_SECONDS`
 
-GitHub releases attach native agent binaries named for the bootstrap download path, for example `soe-agent-aarch64-linux-musl` and `soe-agent-x86_64-windows.exe`.
+GitHub releases attach native agent binaries named for the bootstrap download path, for example `soe-agent-aarch64-linux-musl` and `soe-agent-x86_64-windows.exe`. WebRTC sidecar assets are published beside them as `soe-webrtc-aarch64-macos`, `soe-webrtc-x86_64-linux`, and `soe-webrtc-x86_64-windows.exe`.

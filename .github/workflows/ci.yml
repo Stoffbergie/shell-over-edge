@@ -73,6 +73,10 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
@@ -81,7 +85,7 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Test
-        run: pnpm run test && pnpm run test:native
+        run: pnpm run test && pnpm run test:native && pnpm run test:webrtc
 
       - name: Ensure tests did not modify files
         run: git diff --exit-code

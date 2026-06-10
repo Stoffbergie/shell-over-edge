@@ -2,7 +2,7 @@
 
 > Reach any shell from anywhere. Production base URL: `https://soe.stoff.dev`.
 
-Shell Over Edge creates short-lived 8-character session codes. A bootstrap starts a generated relay agent immediately and can warm a native agent download in the background. The agent long-polls the Worker for commands, executes them locally, then posts plain text output back.
+Shell Over Edge creates short-lived 8-character session codes. A bootstrap starts a generated relay agent immediately and can warm a native agent download in the background. The agent long-polls the Worker for commands, executes them locally, then posts plain text output back. `/config webrtc` starts an optional `soe-webrtc` sidecar for RTCDataChannel commands while keeping relay available.
 
 ## Public API
 
@@ -66,9 +66,15 @@ JSON is also accepted:
 
 Valid values are `auto`, `relay`, `native`, `direct`, and `webrtc`. The response is JSON with `requested`, `active`, `upgraded`, `fallback`, and `reason` fields. If a requested transport cannot activate, keep using `/send` with the reported active fallback.
 
+When `/config webrtc` returns `active: "webrtc"`, use the helper binary for DataChannel commands:
+
+```sh
+soe-webrtc send --base-url https://soe.stoff.dev --session <code> --body 'pwd'
+```
+
 ## Direct Upgrade
 
-The relay route is the universal fallback. Rich helpers should start with `/probe` and `/config`. Driver-level helpers can still use the public service as rendezvous: fetch ICE config when using WebRTC, exchange short-lived direct signals, try a direct stream with a small timeout, then fall back to `/send` if direct fails.
+The relay route is the universal fallback. Rich helpers should start with `/probe` and `/config`. Driver-level helpers can still use the public service as rendezvous: fetch ICE config when using WebRTC, exchange short-lived direct signals, open an RTCDataChannel, then fall back to `/send` if direct fails.
 
 HTTP direct signal payload:
 
@@ -89,7 +95,8 @@ Direct command endpoints should accept the same JSON command payload and return 
 - Sessions are short code capabilities.
 - The response header `X-Session-Id` contains the code for newly created sessions.
 - Generated agents print the code and copy it to the clipboard when possible.
-- The bootstrap only downloads native binaries when `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, `SOE_NATIVE_URL` is set, or `/config` asks for a driver-backed transport.
+- The bootstrap only downloads native binaries when `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, `SOE_NATIVE_URL` is set, or `/config native` asks for one.
+- `/config webrtc` downloads and starts a `soe-webrtc-*` sidecar such as `soe-webrtc-aarch64-macos`, `soe-webrtc-x86_64-linux`, or `soe-webrtc-x86_64-windows.exe`.
 - Most responses are plain text by design.
 - `/probe` and `/config` intentionally return JSON because they are machine-readable control endpoints.
 - No bearer tokens, helper tokens, agent tokens, URL tokens, or auth headers are used in the current API.
@@ -110,6 +117,7 @@ Direct command endpoints should accept the same JSON command payload and return 
 - Use JSON `/send` only for `cwd` or timeout control.
 - Use `/probe` before guessing OS, hardware, or transport support.
 - Use `/config` to request `native`, `direct`, or `webrtc`; do not manually pause or replace agents.
+- Use `soe-webrtc send` for WebRTC DataChannel commands after `/config webrtc` succeeds; use `/send` as fallback.
 - Keep commands explicit and reversible.
 - End sessions with `/end` when finished.
 - Do not depend on undocumented response JSON.
