@@ -5,17 +5,22 @@ import { createSession, createTestEnv, text, type TestFixture } from "../helpers
 
 console.info = () => {};
 
-test("session creation returns plain scripts keyed by a short code capability", async () => {
+test("session creation returns relay-only scripts keyed by a short code capability", async () => {
   const fixture = createTestEnv();
   const bootstrap = await app.request("/a", {}, fixture.env, fixture.ctx);
   assert.equal(bootstrap.status, 200);
   assert.equal(bootstrap.headers.get("Content-Type"), "text/x-shellscript; charset=utf-8");
-  assert.match(await text(bootstrap), /SOE_NO_END_ON_EXIT=1 sh "\$AGENT_FILE"/);
+  const bootstrapText = await text(bootstrap);
+  assert.match(bootstrapText, /sh "\$AGENT_FILE"/);
+  assert.ok(!bootstrapText.includes("SOE_NATIVE"));
+  assert.ok(!bootstrapText.includes("SOE_AUTO_UPGRADE"));
 
   const powerShellBootstrap = await app.request("/a.ps1", {}, fixture.env, fixture.ctx);
   assert.equal(powerShellBootstrap.status, 200);
   assert.equal(powerShellBootstrap.headers.get("Content-Type"), "text/plain; charset=utf-8");
-  assert.match(await text(powerShellBootstrap), /\$env:SOE_NO_END_ON_EXIT = "1"/);
+  const powerShellBootstrapText = await text(powerShellBootstrap);
+  assert.match(powerShellBootstrapText, /api\/sessions\.ps1/);
+  assert.ok(!powerShellBootstrapText.includes("SOE_NATIVE"));
 
   const shell = await createSession(app, fixture);
   assert.equal(shell.contentType, "text/x-shellscript; charset=utf-8");
@@ -25,9 +30,11 @@ test("session creation returns plain scripts keyed by a short code capability", 
   assert.ok(shell.script.includes(`SESSION_ID='${shell.id}'`));
   assert.ok(shell.script.includes(`/api/sessions/$SESSION_ID/next`));
   assert.ok(shell.script.includes("Session: %s (%s)\\nStop anytime: Ctrl+C\\n"));
+  assert.ok(shell.script.includes("copy_text()"));
   assert.ok(!shell.script.includes("Send command:"));
   assert.ok(!shell.script.includes("Expires:"));
-  assert.ok(shell.script.includes("copy_text()"));
+  assert.ok(!shell.script.includes("soe-agent"));
+  assert.ok(!shell.script.includes("soe-webrtc"));
   assert.ok(!shell.script.includes("Authorization: Bearer"));
   assert.ok(!shell.script.includes("?token" + "="));
 
@@ -38,9 +45,11 @@ test("session creation returns plain scripts keyed by a short code capability", 
   assert.ok(powerShell.script.includes("/api/sessions/$SessionId/next"));
   assert.ok(powerShell.script.includes('Write-Host "Session: $SessionId ($Clipboard)"'));
   assert.ok(powerShell.script.includes('Write-Host "Stop anytime: Ctrl+C"'));
+  assert.ok(powerShell.script.includes("Set-Clipboard"));
   assert.ok(!powerShell.script.includes('Write-Host "Send command:"'));
   assert.ok(!powerShell.script.includes('Write-Host "Expires:'));
-  assert.ok(powerShell.script.includes("Set-Clipboard"));
+  assert.ok(!powerShell.script.includes("soe-agent"));
+  assert.ok(!powerShell.script.includes("soe-webrtc"));
   assert.ok(!powerShell.script.includes("Authorization"));
   assert.ok(!powerShell.script.includes("?token" + "="));
 });
@@ -66,7 +75,6 @@ test("send waits for the agent result and returns plain command output", async (
   }, fixture.env, fixture.ctx);
 
   const nextJson = await waitForNext(session.id, fixture);
-  assert.equal(nextJson.headers.get("X-Command-Type"), "shell");
   assert.equal(nextJson.headers.get("X-Command-Timeout"), "12");
   assert.equal(Buffer.from(nextJson.headers.get("X-Command-Cwd-Base64") || "", "base64").toString("utf8"), "/tmp");
   assert.equal(await text(nextJson), "pwd");
@@ -147,42 +155,6 @@ test("parallel sends keep command results matched under burst load", async () =>
   }
 });
 
-test("queued commands do not timeout before an agent receives them", async () => {
-  const fixture = createTestEnv();
-  const session = await createSession(app, fixture);
-  const first = app.request(`/api/sessions/${session.id}/send`, {
-    method: "POST",
-    body: '{"body":"first","timeoutSeconds":1}'
-  }, fixture.env, fixture.ctx);
-  const second = app.request(`/api/sessions/${session.id}/send`, {
-    method: "POST",
-    body: '{"body":"second","timeoutSeconds":1}'
-  }, fixture.env, fixture.ctx);
-
-  await sleep(2200);
-
-  const firstCommand = await waitForNext(session.id, fixture);
-  const firstCommandId = firstCommand.headers.get("X-Command-Id") || "";
-  assert.equal(await text(firstCommand), "first");
-  assert.equal((await app.request(`/api/sessions/${session.id}/result/${firstCommandId}?exit=0`, {
-    method: "POST",
-    body: "first-ok"
-  }, fixture.env, fixture.ctx)).status, 200);
-
-  const secondCommand = await waitForNext(session.id, fixture);
-  const secondCommandId = secondCommand.headers.get("X-Command-Id") || "";
-  assert.equal(await text(secondCommand), "second");
-  assert.equal((await app.request(`/api/sessions/${session.id}/result/${secondCommandId}?exit=0`, {
-    method: "POST",
-    body: "second-ok"
-  }, fixture.env, fixture.ctx)).status, 200);
-
-  assert.equal((await first).status, 200);
-  const secondResponse = await second;
-  assert.equal(secondResponse.status, 200);
-  assert.equal(await text(secondResponse), "second-ok");
-});
-
 test("late known command results are acknowledged after helper timeout", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);
@@ -216,140 +188,7 @@ test("late known command results are acknowledged after helper timeout", async (
   assert.equal(await text(unknown), "Command not found\n");
 });
 
-test("sessions exchange short-lived direct transport signals", async () => {
-  const fixture = createTestEnv();
-  const session = await createSession(app, fixture);
-
-  const invalid = await app.request(`/api/sessions/${session.id}/signals`, {
-    method: "POST",
-    body: '{"role":"agent","url":"ftp://127.0.0.1/direct"}'
-  }, fixture.env, fixture.ctx);
-  assert.equal(invalid.status, 400);
-  assert.equal(await text(invalid), "Invalid direct signal\n");
-
-  const published = await app.request(`/api/sessions/${session.id}/signals`, {
-    method: "POST",
-    body: '{"role":"agent","transport":"http","url":"http://127.0.0.1:9999/direct","priority":5,"ttlSeconds":30}'
-  }, fixture.env, fixture.ctx);
-  assert.equal(published.status, 201);
-  const signal = await published.json() as { id: string; role: string; transport: string; url: string; priority: number };
-  assert.ok(signal.id);
-  assert.equal(signal.role, "agent");
-  assert.equal(signal.transport, "http");
-  assert.equal(signal.url, "http://127.0.0.1:9999/direct");
-  assert.equal(signal.priority, 5);
-
-  const offer = await app.request(`/api/sessions/${session.id}/signals`, {
-    method: "POST",
-    body: JSON.stringify({ role: "client", transport: "webrtc", data: { type: "offer", sdp: "v=0\r\n" }, priority: 1 })
-  }, fixture.env, fixture.ctx);
-  assert.equal(offer.status, 201);
-  const offerSignal = await offer.json() as { role: string; transport: string; data: { kind: string; sdp: string } };
-  assert.equal(offerSignal.role, "client");
-  assert.equal(offerSignal.transport, "webrtc");
-  assert.equal(offerSignal.data.kind, "offer");
-  assert.equal(offerSignal.data.sdp, "v=0\r\n");
-
-  const client = await app.request(`/api/sessions/${session.id}/signals`, {
-    method: "POST",
-    body: '{"role":"client","transport":"http","url":"http://127.0.0.1:8888/direct","priority":50}'
-  }, fixture.env, fixture.ctx);
-  assert.equal(client.status, 201);
-
-  const agents = await app.request(`/api/sessions/${session.id}/signals?role=agent`, {}, fixture.env, fixture.ctx);
-  assert.equal(agents.status, 200);
-  const listed = await agents.json() as { signals: Array<{ id: string; role: string; priority: number }> };
-  assert.equal(listed.signals.length, 1);
-  assert.equal(listed.signals[0]?.id, signal.id);
-  assert.equal(listed.signals[0]?.role, "agent");
-
-  const badRole = await app.request(`/api/sessions/${session.id}/signals?role=helper`, {}, fixture.env, fixture.ctx);
-  assert.equal(badRole.status, 400);
-  assert.equal(await text(badRole), "Invalid direct signal role\n");
-});
-
-test("sessions return default ICE config without TURN secrets", async () => {
-  const fixture = createTestEnv();
-  const session = await createSession(app, fixture);
-
-  const response = await app.request(`/api/sessions/${session.id}/ice`, {}, fixture.env, fixture.ctx);
-  assert.equal(response.status, 200);
-  const payload = await response.json() as { iceServers: Array<{ urls: string[] }>; source: string; turnEnabled: boolean; ttlSeconds: number };
-  assert.equal(payload.source, "cloudflare-stun");
-  assert.equal(payload.turnEnabled, false);
-  assert.equal(payload.ttlSeconds, 7200);
-  assert.deepEqual(payload.iceServers, [{ urls: ["stun:stun.cloudflare.com:3478"] }]);
-});
-
-test("probe and config use typed agent control commands", async () => {
-  const fixture = createTestEnv();
-  const session = await createSession(app, fixture);
-
-  const probe = app.request(`/api/sessions/${session.id}/probe`, {}, fixture.env, fixture.ctx);
-  const probeCommand = await waitForNext(session.id, fixture);
-  assert.equal(probeCommand.headers.get("X-Command-Type"), "probe");
-  assert.equal(probeCommand.headers.get("X-Command-Timeout"), "15");
-  assert.equal(await text(probeCommand), "");
-
-  const probeResult = await app.request(`/api/sessions/${session.id}/result/${probeCommand.headers.get("X-Command-Id")}?exit=0`, {
-    method: "POST",
-    body: '{"session":"abc234de","supports":{"relay":true,"native":true,"webrtcSignaling":true}}'
-  }, fixture.env, fixture.ctx);
-  assert.equal(probeResult.status, 200);
-
-  const probeResponse = await probe;
-  assert.equal(probeResponse.status, 200);
-  assert.match(probeResponse.headers.get("Content-Type") || "", /^application\/json/);
-  assert.equal(probeResponse.headers.get("X-Command-Type"), "probe");
-  const probePayload = await probeResponse.json() as { supports: { native: boolean } };
-  assert.equal(probePayload.supports.native, true);
-
-  const config = app.request(`/api/sessions/${session.id}/config`, {
-    method: "POST",
-    body: "webrtc"
-  }, fixture.env, fixture.ctx);
-  const configCommand = await waitForNext(session.id, fixture);
-  assert.equal(configCommand.headers.get("X-Command-Type"), "config");
-  assert.equal(configCommand.headers.get("X-Command-Timeout"), "60");
-  assert.equal(await text(configCommand), "webrtc");
-
-  const configResult = await app.request(`/api/sessions/${session.id}/result/${configCommand.headers.get("X-Command-Id")}?exit=0`, {
-    method: "POST",
-    body: '{"ok":true,"requested":"webrtc","active":"native","fallback":true}'
-  }, fixture.env, fixture.ctx);
-  assert.equal(configResult.status, 200);
-
-  const configResponse = await config;
-  assert.equal(configResponse.status, 200);
-  assert.match(configResponse.headers.get("Content-Type") || "", /^application\/json/);
-  assert.equal(configResponse.headers.get("X-Command-Type"), "config");
-  const configPayload = await configResponse.json() as { requested: string; active: string; fallback: boolean };
-  assert.equal(configPayload.requested, "webrtc");
-  assert.equal(configPayload.active, "native");
-  assert.equal(configPayload.fallback, true);
-
-  const jsonConfig = app.request(`/api/sessions/${session.id}/config`, {
-    method: "POST",
-    body: '{"transport":"native"}'
-  }, fixture.env, fixture.ctx);
-  const jsonCommand = await waitForNext(session.id, fixture);
-  assert.equal(jsonCommand.headers.get("X-Command-Type"), "config");
-  assert.equal(await text(jsonCommand), "native");
-  assert.equal((await app.request(`/api/sessions/${session.id}/result/${jsonCommand.headers.get("X-Command-Id")}?exit=0`, {
-    method: "POST",
-    body: '{"ok":true,"requested":"native","active":"native"}'
-  }, fixture.env, fixture.ctx)).status, 200);
-  assert.equal((await jsonConfig).status, 200);
-
-  const invalidConfig = await app.request(`/api/sessions/${session.id}/config`, {
-    method: "POST",
-    body: "ftp"
-  }, fixture.env, fixture.ctx);
-  assert.equal(invalidConfig.status, 400);
-  assert.equal(await text(invalidConfig), "Unsupported transport config: ftp\n");
-});
-
-test("invalid sessions, bad send payloads, and retired routes return text errors", async () => {
+test("invalid sessions, bad send payloads, and removed routes return text errors", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);
 
@@ -360,10 +199,11 @@ test("invalid sessions, bad send payloads, and retired routes return text errors
   assert.equal(invalidPayload.status, 400);
   assert.equal(await text(invalidPayload), "Invalid JSON command payload\n");
 
-  const oldStart = await app.request(`/start/${session.id}.sh`, {}, fixture.env, fixture.ctx);
-  assert.equal(oldStart.status, 404);
-  assert.equal(await text(oldStart), "Not found\n");
-
+  assert.equal((await app.request(`/api/sessions/${session.id}/probe`, {}, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/api/sessions/${session.id}/config`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/api/sessions/${session.id}/ice`, {}, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/api/sessions/${session.id}/signals`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/start/${session.id}.sh`, {}, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request(`/api/agent/${session.id}/next`, {}, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request(`/api/sessions/${session.id}/commands`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request(`/api/sessions/${session.id}/upload`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);

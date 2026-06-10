@@ -1,9 +1,6 @@
 import { strict as assert } from "node:assert";
 import type { Hono } from "hono";
-import type { DirectRole, DirectSignal, DirectSignalPayload } from "../../src/domain/direct";
-import { directSignalKey, normalizeDirectRole, normalizeDirectSignal, sortDirectSignals } from "../../src/domain/direct";
 import type { SessionMeta } from "../../src/domain/session";
-import { maxDirectSignalsPerRole } from "../../src/shared/config";
 import type { Env } from "../../src/worker/env";
 
 type BridgeFetch = (id: string, request: RequestInfo | URL, init?: RequestInit) => Response | Promise<Response>;
@@ -23,14 +20,12 @@ export type TestFixture = {
 
 type BridgeCommand = {
   id: string;
-  type: "shell" | "probe" | "config";
   body: string;
   cwd: string;
   timeoutSeconds: number;
 };
 
 type BridgeWaiter = {
-  type?: BridgeCommand["type"];
   resolve: (response: Response) => void;
   queueTimer?: ReturnType<typeof setTimeout>;
   resultTimer?: ReturnType<typeof setTimeout>;
@@ -184,19 +179,14 @@ class FakeSessionBridge {
   private nextWaiters: BridgeWaiter[] = [];
   private resultWaiters = new Map<string, BridgeWaiter>();
   private recentCommands = new Map<string, number>();
-  private signals: DirectSignal[] = [];
 
   async fetch(request: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
     const url = new URL(String(request));
     const method = init.method || "GET";
     const body = await requestBody(init.body);
     if (url.pathname === "/send") return this.send(body);
-    if (url.pathname === "/probe") return this.control("probe", "", 15);
-    if (url.pathname === "/config") return this.control("config", body, 60);
     if (url.pathname === "/next") return this.next();
     if (url.pathname.startsWith("/result/")) return this.result(url.pathname.slice("/result/".length), url.searchParams.get("exit"), body);
-    if (url.pathname === "/signals" && method === "POST") return this.publishSignal(body);
-    if (url.pathname === "/signals" && method === "GET") return this.listSignals(url.searchParams.get("role"));
     if (url.pathname === "/end" && method === "POST") return this.end();
     return new Response("Not found\n", { status: 404 });
   }
@@ -205,22 +195,11 @@ class FakeSessionBridge {
     const payload = JSON.parse(body) as Partial<SessionMeta> & { body?: string; cwd?: string; timeoutSeconds?: number };
     const command: BridgeCommand = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      type: "shell",
       body: payload.body || "",
       cwd: payload.cwd || "",
       timeoutSeconds: payload.timeoutSeconds || 30
     };
     return this.enqueue(command);
-  }
-
-  private control(type: "probe" | "config", body: string, timeoutSeconds: number): Promise<Response> {
-    return this.enqueue({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      type,
-      body,
-      cwd: "",
-      timeoutSeconds
-    });
   }
 
   private enqueue(command: BridgeCommand): Promise<Response> {
@@ -231,7 +210,7 @@ class FakeSessionBridge {
         this.rememberCommand(command.id);
         resolve(new Response("Timed out waiting for command result\n", { status: 504 }));
       }, fakeMaxSendWaitMs);
-      this.resultWaiters.set(command.id, { type: command.type, resolve, queueTimer });
+      this.resultWaiters.set(command.id, { resolve, queueTimer });
     });
     this.dispatch(command);
     return response;
@@ -270,46 +249,12 @@ class FakeSessionBridge {
       status: exitCode === 0 ? 200 : 500,
       headers: {
         "Cache-Control": "no-store",
-        "Content-Type": waiter.type === "probe" || waiter.type === "config" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8",
+        "Content-Type": "text/plain; charset=utf-8",
         "X-Command-Id": commandId,
-        "X-Command-Type": waiter.type || "shell",
         "X-Exit-Code": String(exitCode)
       }
     }));
     return new Response("ok\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
-  }
-
-  private publishSignal(body: string): Response {
-    const payload = JSON.parse(body || "{}") as DirectSignalPayload;
-    const now = Date.now();
-    const signal = normalizeDirectSignal(payload, `${Date.now()}-${Math.random().toString(36).slice(2)}`, now, 60_000);
-    if (!signal) return new Response("Invalid direct signal\n", { status: 400 });
-    this.pruneSignals(now);
-    this.signals = [
-      signal,
-      ...this.signals.filter((item) => directSignalKey(item) !== directSignalKey(signal))
-    ];
-    this.trimSignals(signal.role);
-    return new Response(JSON.stringify(signal), {
-      status: 201,
-      headers: {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/json; charset=utf-8"
-      }
-    });
-  }
-
-  private listSignals(roleValue: string | null): Response {
-    this.pruneSignals(Date.now());
-    const role = roleValue ? normalizeDirectRole(roleValue) : undefined;
-    if (roleValue && !role) return new Response("Invalid direct signal role\n", { status: 400 });
-    const signals = sortDirectSignals(role ? this.signals.filter((signal) => signal.role === role) : this.signals);
-    return new Response(JSON.stringify({ signals }), {
-      headers: {
-        "Cache-Control": "no-store",
-        "Content-Type": "application/json; charset=utf-8"
-      }
-    });
   }
 
   private end(): Response {
@@ -327,7 +272,6 @@ class FakeSessionBridge {
     this.nextWaiters = [];
     this.resultWaiters.clear();
     this.recentCommands.clear();
-    this.signals = [];
     return new Response("ended\n", { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
   }
 
@@ -340,18 +284,6 @@ class FakeSessionBridge {
     this.markDelivered(command);
     if (waiter.queueTimer) clearTimeout(waiter.queueTimer);
     waiter.resolve(commandResponse(command));
-  }
-
-  private pruneSignals(now: number): void {
-    this.signals = this.signals.filter((signal) => signal.expiresAt > now);
-  }
-
-  private trimSignals(role: DirectRole): void {
-    const keep = [...this.signals.filter((signal) => signal.role === role)]
-      .sort((a, b) => a.priority - b.priority || b.createdAt - a.createdAt)
-      .slice(0, maxDirectSignalsPerRole);
-    const keepIds = new Set(keep.map((signal) => signal.id));
-    this.signals = this.signals.filter((signal) => signal.role !== role || keepIds.has(signal.id));
   }
 
   private markDelivered(command: BridgeCommand): void {
@@ -393,7 +325,6 @@ function commandResponse(command: BridgeCommand): Response {
     "Cache-Control": "no-store",
     "Content-Type": "application/octet-stream",
     "X-Command-Id": command.id,
-    "X-Command-Type": command.type,
     "X-Command-Timeout": String(command.timeoutSeconds)
   });
   if (command.cwd) headers.set("X-Command-Cwd-Base64", Buffer.from(command.cwd).toString("base64"));

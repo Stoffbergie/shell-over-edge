@@ -12,6 +12,32 @@ const banned = [
   "?token" + "="
 ];
 
+const removedTransportTerms = [
+  "SOE_WARM_NATIVE",
+  "SOE_AUTO_UPGRADE",
+  "SOE_NATIVE_URL",
+  "SOE_NATIVE_BASE_URL",
+  "SOE_WEBRTC_URL",
+  "SOE_WEBRTC_BASE_URL",
+  "soe-agent",
+  "soe-webrtc",
+  "WebRTC",
+  "RTCPeerConnection",
+  "stun.cloudflare.com",
+  "turn.cloudflare.com",
+  "/signals",
+  "/ice",
+  "/probe"
+];
+
+const allowedRemovedTermFiles = new Set([
+  "scripts/repo-audit.mjs",
+  "scripts/smoke-prod.mjs",
+  "tests/e2e/agent-script.test.ts",
+  "tests/integration/app-flow.test.ts",
+  "tests/unit/scripts.test.ts"
+]);
+
 const requiredFiles = [
   ".github/CODEOWNERS",
   ".github/dependabot.yml",
@@ -19,23 +45,30 @@ const requiredFiles = [
   ".github/workflows/deploy.yml",
   ".github/workflows/dependency-review.yml",
   ".github/workflows/labeler.yml",
-  ".github/workflows/release.yml",
   ".gitattributes",
   "LICENSE",
-  "build.zig",
-  "go.mod",
   "llms.txt",
-  "native/agent/main.zig",
-  "native/webrtc/main.go",
   "pnpm-workspace.yaml",
-  "scripts/build-native-linux.mjs",
-  "scripts/build-webrtc.mjs",
   "scripts/benchmark.mjs",
   "scripts/repo-audit.mjs",
   "scripts/smoke-prod.mjs",
   "skills/shell-over-edge/SKILL.md",
   "tsconfig.test.json",
   "vitest.config.ts"
+];
+
+const removedFiles = [
+  ".github/workflows/release.yml",
+  "build.zig",
+  "go.mod",
+  "go.sum",
+  "native/agent/main.zig",
+  "native/webrtc/main.go",
+  "scripts/build-native-linux.mjs",
+  "scripts/build-webrtc.mjs",
+  "src/client/direct-send.ts",
+  "src/domain/direct.ts",
+  "src/worker/services/ice-servers.ts"
 ];
 
 const textFiles = [];
@@ -54,16 +87,24 @@ async function readText(path) {
   return readFile(path, "utf8");
 }
 
+async function exists(path) {
+  try {
+    await readText(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   await walk(root);
   const failures = [];
 
   for (const file of requiredFiles) {
-    try {
-      await readText(join(root, file));
-    } catch {
-      failures.push(`Missing ${file}`);
-    }
+    if (!await exists(join(root, file))) failures.push(`Missing ${file}`);
+  }
+  for (const file of removedFiles) {
+    if (await exists(join(root, file))) failures.push(`${file} should not exist in relay-only mode`);
   }
 
   for (const file of textFiles) {
@@ -74,6 +115,11 @@ async function main() {
     for (const value of banned) {
       if (text.includes(value)) failures.push(`${rel} contains ${value}`);
     }
+    if (!allowedRemovedTermFiles.has(rel)) {
+      for (const value of removedTransportTerms) {
+        if (text.includes(value)) failures.push(`${rel} still references removed transport term ${value}`);
+      }
+    }
   }
 
   const pkg = JSON.parse(await readText(join(root, "package.json")));
@@ -83,79 +129,46 @@ async function main() {
   if (pkg.homepage !== "https://soe.stoff.dev") failures.push("package.json homepage must be https://soe.stoff.dev");
   if (pkg.repository?.url !== "https://github.com/Stoffberg/shell-over-edge.git") failures.push("package.json repository URL is wrong");
   if (pkg.scripts?.test !== "vitest run") failures.push("package.json test script must use Vitest");
-  if (!pkg.scripts?.benchmark) failures.push("package.json missing benchmark");
-  if (!pkg.scripts?.["test:load"]) failures.push("package.json missing test:load");
-  if (!pkg.scripts?.["test:native"]) failures.push("package.json missing test:native");
-  if (!pkg.scripts?.["test:webrtc"]) failures.push("package.json missing test:webrtc");
+  if (pkg.scripts?.["test:load"] !== "vitest run tests/e2e/relay-load.test.ts tests/e2e/agent-script.test.ts") failures.push("package.json test:load must cover relay load and generated agents");
   if (!pkg.scripts?.["test:containers"]) failures.push("package.json missing test:containers");
-  if (!pkg.scripts?.["native:build"]) failures.push("package.json missing native:build");
-  if (!pkg.scripts?.["native:build:linux"]) failures.push("package.json missing native:build:linux");
-  if (!pkg.scripts?.["webrtc:build"]) failures.push("package.json missing webrtc:build");
-  if (!pkg.scripts?.["webrtc:build:all"]) failures.push("package.json missing webrtc:build:all");
+  for (const script of ["native:build", "native:build:linux", "test:native", "test:webrtc", "webrtc:build", "webrtc:build:all"]) {
+    if (pkg.scripts?.[script]) failures.push(`package.json still has ${script}`);
+  }
   if (!pkg.scripts?.["typecheck:test"]) failures.push("package.json missing typecheck:test");
   if (!pkg.devDependencies?.vitest) failures.push("package.json missing vitest");
+
+  const ci = await readText(join(root, ".github/workflows/ci.yml"));
+  if (ci.includes("setup-go") || ci.includes("setup-zig") || ci.includes("test:native") || ci.includes("test:webrtc")) {
+    failures.push("CI still installs or tests removed native/WebRTC tooling");
+  }
 
   const wrangler = await readText(join(root, "wrangler.toml"));
   for (const value of ['name = "soe"', 'BASE_URL = "https://soe.stoff.dev"', 'pattern = "soe.stoff.dev"', 'bucket_name = "soe-mailbox"']) {
     if (!wrangler.includes(value)) failures.push(`wrangler.toml missing ${value}`);
   }
 
-  const release = await readText(join(root, ".github/workflows/release.yml"));
-  if (!release.includes("mlugg/setup-zig@v2")) failures.push("release workflow must install Zig");
-  if (!release.includes("actions/setup-go@v6")) failures.push("release workflow must install Go");
-  if (!release.includes("soe-agent-x86_64-linux-musl")) failures.push("release workflow must build native Linux assets");
-  if (!release.includes("soe-agent-aarch64-macos")) failures.push("release workflow must build native macOS assets");
-  if (!release.includes("soe-agent-x86_64-windows.exe")) failures.push("release workflow must build native Windows assets");
-  if (!release.includes("soe-webrtc-x86_64-linux")) failures.push("release workflow must build WebRTC Linux assets");
-  if (!release.includes("soe-webrtc-aarch64-macos")) failures.push("release workflow must build WebRTC macOS assets");
-  if (!release.includes("soe-webrtc-x86_64-windows.exe")) failures.push("release workflow must build WebRTC Windows assets");
-  if (!release.includes("files: dist/native/*")) failures.push("release workflow must upload native assets");
-
   const readme = await readText(join(root, "README.md"));
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
   if (!readme.includes("Reach any shell from anywhere.")) failures.push("README one-liner is wrong");
   if (!readme.includes("```mermaid")) failures.push("README must include a Mermaid flow diagram");
   if (!readme.includes("curl -sS https://soe.stoff.dev/a | sh")) failures.push("README must document POSIX bootstrap");
+  if (!readme.includes("/api/sessions/<code>/send")) failures.push("README must document send endpoint");
   if (!readme.includes("pnpm run benchmark")) failures.push("README must document performance benchmark");
-  if (!readme.includes("SOE_WARM_NATIVE=1")) failures.push("README must document native download opt-in");
-  if (!readme.includes("soe-webrtc")) failures.push("README must document WebRTC sidecar assets");
-  if (!readme.includes("/api/sessions/<code>/probe")) failures.push("README must document probe endpoint");
-  if (!readme.includes("/api/sessions/<code>/config")) failures.push("README must document config endpoint");
-  if (!readme.includes("/api/sessions/<code>/signals")) failures.push("README must document direct signals");
-  if (!readme.includes("/api/sessions/<code>/ice")) failures.push("README must document ICE config");
-  if (!readme.includes("agent/main.zig")) failures.push("README must document native agent layout");
-  if (!readme.includes("Direct Transport")) failures.push("README must document the direct transport tradeoff");
   if (!readme.includes("llms.txt")) failures.push("README must link llms.txt");
   if (!readme.includes("skills/shell-over-edge/SKILL.md")) failures.push("README must link the Shell Over Edge skill");
   if (readme.includes("Authorization: Bearer")) failures.push("README must not document retired bearer-token API");
-  if (readme.includes("/commands")) failures.push("README must not document retired commands endpoint");
-  if (readme.includes("/direct-attempts")) failures.push("README must not document retired direct-attempts endpoint");
 
   const llms = await readText(join(root, "llms.txt"));
   if (!llms.includes("GET /a")) failures.push("llms.txt must document POSIX bootstrap");
-  if (!llms.includes("SOE_WARM_NATIVE=1")) failures.push("llms.txt must document native download opt-in");
-  if (!llms.includes("soe-webrtc")) failures.push("llms.txt must document WebRTC sidecar assets");
   if (!llms.includes("POST /api/sessions")) failures.push("llms.txt must document session creation");
-  if (!llms.includes("GET /api/sessions/<code>/probe")) failures.push("llms.txt must document probe endpoint");
-  if (!llms.includes("POST /api/sessions/<code>/config")) failures.push("llms.txt must document config endpoint");
   if (!llms.includes("POST /api/sessions/<code>/send")) failures.push("llms.txt must document command send");
-  if (!llms.includes("POST /api/sessions/<code>/signals")) failures.push("llms.txt must document direct signals");
-  if (!llms.includes("GET /api/sessions/<code>/ice")) failures.push("llms.txt must document ICE config");
   if (llms.includes("Authorization: Bearer")) failures.push("llms.txt must not document retired bearer-token API");
-  if (llms.includes("/direct-attempts")) failures.push("llms.txt must not document retired direct-attempts endpoint");
 
   const skill = await readText(join(root, "skills/shell-over-edge/SKILL.md"));
   if (!skill.includes("name: shell-over-edge")) failures.push("Shell Over Edge skill missing name metadata");
   if (!skill.includes("GET https://soe.stoff.dev/a")) failures.push("Shell Over Edge skill must document POSIX bootstrap");
-  if (!skill.includes("SOE_WARM_NATIVE=1")) failures.push("Shell Over Edge skill must document native download opt-in");
-  if (!skill.includes("soe-webrtc")) failures.push("Shell Over Edge skill must document WebRTC sidecar assets");
-  if (!skill.includes("GET https://soe.stoff.dev/api/sessions/<code>/probe")) failures.push("Shell Over Edge skill must document probe endpoint");
-  if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/config")) failures.push("Shell Over Edge skill must document config endpoint");
   if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/send")) failures.push("Shell Over Edge skill must document command send");
-  if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/signals")) failures.push("Shell Over Edge skill must document direct signals");
-  if (!skill.includes("GET https://soe.stoff.dev/api/sessions/<code>/ice")) failures.push("Shell Over Edge skill must document ICE config");
   if (skill.includes("Authorization: Bearer")) failures.push("Shell Over Edge skill must not document retired bearer-token API");
-  if (skill.includes("/direct-attempts")) failures.push("Shell Over Edge skill must not document retired direct-attempts endpoint");
 
   if (failures.length > 0) {
     console.error(failures.join("\n"));

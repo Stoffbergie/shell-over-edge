@@ -15,16 +15,6 @@ async function request(path, init = {}) {
   });
 }
 
-async function requestUntil(path, init, ready) {
-  let result;
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    result = await request(path, init);
-    if (ready(result)) return result;
-    await sleep(1000);
-  }
-  return result;
-}
-
 function requestText(url, init) {
   const client = url.protocol === "http:" ? http : https;
   const headers = { ...init.headers };
@@ -33,7 +23,7 @@ function requestText(url, init) {
   }
 
   return new Promise((resolve, reject) => {
-    const request = client.request(url, {
+    const req = client.request(url, {
       headers,
       lookup: resilientLookup,
       method: init.method,
@@ -54,10 +44,10 @@ function requestText(url, init) {
       });
     });
 
-    request.on("error", reject);
-    request.on("timeout", () => request.destroy(new Error(`Request timed out after 15000ms: ${url.href}`)));
-    if (init.body) request.write(init.body);
-    request.end();
+    req.on("error", reject);
+    req.on("timeout", () => req.destroy(new Error(`Request timed out after 15000ms: ${url.href}`)));
+    if (init.body) req.write(init.body);
+    req.end();
   });
 }
 
@@ -91,32 +81,32 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function isSessionCode(value) {
+  return /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/.test(value || "");
 }
 
 const root = await request("/");
 assert(root.response.ok, `GET / returned ${root.response.status}`);
 assert(root.text.includes("Shell Over Edge"), "GET / did not return Shell Over Edge usage");
-assert(root.text.includes("/api/sessions/<code>/send"), "GET / did not return simplified send usage");
-assert(root.text.includes("/api/sessions/<code>/probe"), "GET / did not return probe usage");
-assert(root.text.includes("/api/sessions/<code>/config"), "GET / did not return config usage");
+assert(root.text.includes("/api/sessions/<code>/send"), "GET / did not return send usage");
 assert(root.text.includes(`${baseUrl}/a | sh`), "GET / did not return bootstrap usage");
+assert(!root.text.includes("/probe"), "GET / should not document probe");
+assert(!root.text.includes("/config"), "GET / should not document config");
+assert(!root.text.includes("WebRTC"), "GET / should not document WebRTC");
 
 const legacy = await request("/connect.sh");
 assert(legacy.response.status === 404, `legacy connect.sh should be disabled, got ${legacy.response.status}`);
 
 const bootstrap = await request("/a");
 assert(bootstrap.response.ok, `GET /a returned ${bootstrap.response.status}: ${bootstrap.text}`);
-assert(bootstrap.text.includes("SOE_NO_END_ON_EXIT=1 sh \"$AGENT_FILE\""), "POSIX bootstrap does not start relay with upgrade-safe mode");
-assert(bootstrap.text.includes("download_native"), "POSIX bootstrap does not include native download path");
-assert(bootstrap.text.includes("SOE_WARM_NATIVE"), "POSIX bootstrap does not gate native warmup");
+assert(bootstrap.text.includes("sh \"$AGENT_FILE\""), "POSIX bootstrap does not run the relay agent");
+assert(!bootstrap.text.includes("SOE_NATIVE"), "POSIX bootstrap still includes native path");
+assert(!bootstrap.text.includes("SOE_AUTO_UPGRADE"), "POSIX bootstrap still includes auto-upgrade path");
 
 const psBootstrap = await request("/a.ps1");
 assert(psBootstrap.response.ok, `GET /a.ps1 returned ${psBootstrap.response.status}: ${psBootstrap.text}`);
-assert(psBootstrap.text.includes("$env:SOE_NO_END_ON_EXIT = \"1\""), "PowerShell bootstrap does not start relay with upgrade-safe mode");
-assert(psBootstrap.text.includes("Start-NativeDownload"), "PowerShell bootstrap does not include native download path");
-assert(psBootstrap.text.includes("SOE_WARM_NATIVE"), "PowerShell bootstrap does not gate native warmup");
+assert(psBootstrap.text.includes("api/sessions.ps1"), "PowerShell bootstrap does not fetch the relay agent");
+assert(!psBootstrap.text.includes("SOE_NATIVE"), "PowerShell bootstrap still includes native path");
 
 const session = await request("/api/sessions", {
   method: "POST"
@@ -126,13 +116,12 @@ assert(session.response.ok, `POST /api/sessions returned ${session.response.stat
 const id = session.response.headers["x-session-id"];
 assert(isSessionCode(id), "session code header missing");
 assert(session.text.startsWith("#!/bin/sh"), "session response is not a shell script");
-assert(session.text.includes(`/api/sessions/$SESSION_ID/next`), "shell script does not poll the simplified session route");
-assert(session.text.includes("probe_json"), "shell script does not support probe control commands");
-assert(session.text.includes("config_json"), "shell script does not support config control commands");
-assert(session.text.includes("download_webrtc"), "shell script does not support WebRTC driver download");
-assert(session.text.includes("start_webrtc"), "shell script does not start WebRTC sidecar");
-assert(session.text.includes("soe-webrtc"), "shell script does not include WebRTC asset names");
-assert(session.text.includes("X-Command-Type"), "shell script does not read command type");
+assert(session.text.includes(`/api/sessions/$SESSION_ID/next`), "shell script does not poll the session route");
+assert(session.text.includes("AGENT_VERSION='0.3.0'"), "shell script has wrong agent version");
+assert(!session.text.includes("download_native"), "shell script still contains native download");
+assert(!session.text.includes("download_webrtc"), "shell script still contains WebRTC download");
+assert(!session.text.includes("probe_json"), "shell script still contains probe control");
+assert(!session.text.includes("config_json"), "shell script still contains config control");
 assert(!session.text.includes("Authorization"), "shell script should not use authorization headers");
 assert(!session.text.includes("?token" + "="), "shell script leaks token in URL");
 
@@ -143,12 +132,11 @@ assert(powerShell.response.ok, `POST /api/sessions.ps1 returned ${powerShell.res
 const powerShellId = powerShell.response.headers["x-session-id"];
 assert(isSessionCode(powerShellId), "PowerShell session code header missing");
 assert(powerShell.text.includes(`$SessionId = "${powerShellId}"`), "PowerShell script does not embed its session id");
-assert(powerShell.text.includes("/api/sessions/$SessionId/next"), "PowerShell script does not poll the simplified session route");
-assert(powerShell.text.includes("Get-ProbeJson"), "PowerShell script does not support probe control commands");
-assert(powerShell.text.includes("Get-ConfigJson"), "PowerShell script does not support config control commands");
-assert(powerShell.text.includes("Start-WebRtcDriver"), "PowerShell script does not start WebRTC sidecar");
-assert(powerShell.text.includes("soe-webrtc"), "PowerShell script does not include WebRTC asset names");
-assert(powerShell.text.includes("X-Command-Type"), "PowerShell script does not read command type");
+assert(powerShell.text.includes("/api/sessions/$SessionId/next"), "PowerShell script does not poll the session route");
+assert(powerShell.text.includes("$AgentVersion = \"0.3.0\""), "PowerShell script has wrong agent version");
+assert(!powerShell.text.includes("Get-ProbeJson"), "PowerShell script still contains probe control");
+assert(!powerShell.text.includes("Get-ConfigJson"), "PowerShell script still contains config control");
+assert(!powerShell.text.includes("soe-webrtc"), "PowerShell script still contains WebRTC");
 assert(!powerShell.text.includes("Authorization"), "PowerShell script should not use authorization headers");
 
 const powerShellEnd = await request(`/api/sessions/${powerShellId}/end`, {
@@ -166,83 +154,12 @@ const hello = await request(`/api/sessions/${id}/hello`, {
 });
 assert(hello.response.ok, `agent hello returned ${hello.response.status}: ${hello.text}`);
 
-const probe = request(`/api/sessions/${id}/probe`);
-const probeNext = await request(`/api/sessions/${id}/next`);
-assert(probeNext.response.ok, `probe next returned ${probeNext.response.status}: ${probeNext.text}`);
-const probeCommandId = probeNext.response.headers["x-command-id"];
-assert(probeCommandId, "probe next did not return a command id");
-assert(probeNext.response.headers["x-command-type"] === "probe", "probe next did not use probe command type");
-assert(probeNext.text === "", "probe next should not include a shell body");
-
-const probeResult = await request(`/api/sessions/${id}/result/${probeCommandId}?exit=0`, {
-  method: "POST",
-  body: '{"session":"smoke","supports":{"relay":true,"native":true,"webrtcSignaling":true},"activeTransport":"relay"}'
-});
-assert(probeResult.response.ok, `probe result returned ${probeResult.response.status}: ${probeResult.text}`);
-
-const probeResponse = await probe;
-assert(probeResponse.response.ok, `probe returned ${probeResponse.response.status}: ${probeResponse.text}`);
-assert(probeResponse.response.headers["x-command-type"] === "probe", "probe response did not include command type");
-assert(JSON.parse(probeResponse.text).supports.relay === true, "probe response JSON is wrong");
-
-const config = request(`/api/sessions/${id}/config`, {
-  method: "POST",
-  body: "native"
-});
-const configNext = await request(`/api/sessions/${id}/next`);
-assert(configNext.response.ok, `config next returned ${configNext.response.status}: ${configNext.text}`);
-const configCommandId = configNext.response.headers["x-command-id"];
-assert(configCommandId, "config next did not return a command id");
-assert(configNext.response.headers["x-command-type"] === "config", "config next did not use config command type");
-assert(configNext.text === "native", "config next returned the wrong body");
-
-const configResult = await request(`/api/sessions/${id}/result/${configCommandId}?exit=0`, {
-  method: "POST",
-  body: '{"ok":true,"requested":"native","active":"native","upgraded":true,"fallback":false}'
-});
-assert(configResult.response.ok, `config result returned ${configResult.response.status}: ${configResult.text}`);
-
-const configResponse = await config;
-assert(configResponse.response.ok, `config returned ${configResponse.response.status}: ${configResponse.text}`);
-assert(configResponse.response.headers["x-command-type"] === "config", "config response did not include command type");
-assert(JSON.parse(configResponse.text).active === "native", "config response JSON is wrong");
-
-const ice = await requestUntil(`/api/sessions/${id}/ice`, {}, (result) => result.response.status !== 404);
-assert(ice.response.ok, `ICE config returned ${ice.response.status}: ${ice.text}`);
-const icePayload = JSON.parse(ice.text);
-assert(Array.isArray(icePayload.iceServers), "ICE config did not return iceServers");
-assert(ice.text.includes("stun:stun.cloudflare.com:3478"), "ICE config did not include Cloudflare STUN fallback");
-
-const signal = await requestUntil(`/api/sessions/${id}/signals`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json"
-  },
-  body: '{"role":"agent","transport":"http","url":"http://127.0.0.1:9/direct","priority":1,"ttlSeconds":60}'
-}, (result) => result.response.status !== 404);
-assert(signal.response.status === 201, `direct signal returned ${signal.response.status}: ${signal.text}`);
-const signalPayload = JSON.parse(signal.text);
-assert(signalPayload.id, "direct signal id missing");
-assert(signalPayload.role === "agent", "direct signal role is wrong");
-
-const signals = await requestUntil(`/api/sessions/${id}/signals?role=agent`, {}, (result) => result.response.status !== 404);
-assert(signals.response.ok, `direct signal list returned ${signals.response.status}: ${signals.text}`);
-assert(signals.text.includes(signalPayload.id), "direct signal list did not include published signal");
-
-const webRtcSignal = await request(`/api/sessions/${id}/signals`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json"
-  },
-  body: '{"role":"client","transport":"webrtc","data":{"type":"offer","sdp":"v=0\\r\\n"},"priority":1,"ttlSeconds":60}'
-});
-assert(webRtcSignal.response.status === 201, `WebRTC signal returned ${webRtcSignal.response.status}: ${webRtcSignal.text}`);
-assert(JSON.parse(webRtcSignal.text).transport === "webrtc", "WebRTC signal transport is wrong");
-
-const retiredDirectAttempt = await request(`/api/sessions/${id}/direct-attempts`, {
-  method: "POST"
-});
-assert(retiredDirectAttempt.response.status === 404, `direct-attempts should be retired, got ${retiredDirectAttempt.response.status}`);
+for (const removed of ["/probe", "/config", "/ice", "/signals"]) {
+  const removedRoute = await request(`/api/sessions/${id}${removed}`, {
+    method: removed === "/config" || removed === "/signals" ? "POST" : "GET"
+  });
+  assert(removedRoute.response.status === 404, `${removed} should be removed, got ${removedRoute.response.status}`);
+}
 
 const send = request(`/api/sessions/${id}/send`, {
   method: "POST",
@@ -277,9 +194,5 @@ const blocked = await request(`/api/sessions/${id}/send`, {
 });
 assert(blocked.response.status === 410, `ended session send should be 410, got ${blocked.response.status}`);
 assert(blocked.text === "Session ended\n", "ended session send payload is wrong");
-
-function isSessionCode(value) {
-  return /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/.test(value || "");
-}
 
 console.log(`production smoke passed for ${baseUrl}`);

@@ -1,5 +1,5 @@
 import type { SessionMeta } from "../domain/session";
-import { agentProtocolVersion, nativeReleaseBaseUrl, releaseAssetDownloadTimeoutSeconds } from "../shared/config";
+import { agentProtocolVersion, defaultCommandTimeoutSeconds } from "../shared/config";
 import { quoteShell } from "../shared/strings";
 
 export function shellAgentScript(baseUrl: string, meta: SessionMeta): string {
@@ -8,12 +8,6 @@ set -u
 BASE_URL=${quoteShell(baseUrl)}
 SESSION_ID=${quoteShell(meta.code)}
 AGENT_VERSION=${quoteShell(agentProtocolVersion)}
-NATIVE_BASE_URL=\${SOE_NATIVE_BASE_URL:-${quoteShell(nativeReleaseBaseUrl)}}
-NATIVE_FILE="\${TMPDIR:-/tmp}/soe-agent-$SESSION_ID"
-WEBRTC_BASE_URL=\${SOE_WEBRTC_BASE_URL:-$NATIVE_BASE_URL}
-WEBRTC_FILE="\${TMPDIR:-/tmp}/soe-webrtc-$SESSION_ID"
-WEBRTC_ACTIVE_FILE="\${TMPDIR:-/tmp}/soe-webrtc-active-$SESSION_ID"
-UPGRADE_TO_NATIVE=0
 
 copy_text() {
   if command -v pbcopy >/dev/null 2>&1; then
@@ -41,189 +35,6 @@ decode_b64() {
 
 header_value() {
   awk -F': ' -v name="$1" 'tolower($1) == tolower(name) { sub("\\r$", "", $2); print $2; exit }' "$2"
-}
-
-json_escape() {
-  awk 'BEGIN { ORS = "" } { gsub(/\\\\/, "\\\\\\\\"); gsub(/"/, "\\\\\\""); gsub(/\\r/, ""); if (NR > 1) printf "\\\\n"; printf "%s", $0 }'
-}
-
-json_value() {
-  printf '%s' "$1" | json_escape
-}
-
-has_command() {
-  if command -v "$1" >/dev/null 2>&1; then
-    printf 'true'
-  else
-    printf 'false'
-  fi
-}
-
-first_line() {
-  printf '%s' "$1" | sed -n '1p'
-}
-
-native_name() {
-  os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
-  arch=$(uname -m 2>/dev/null | tr '[:upper:]' '[:lower:]')
-  case "$os:$arch" in
-    darwin:arm64) printf '%s' soe-agent-aarch64-macos ;;
-    darwin:x86_64) printf '%s' soe-agent-x86_64-macos ;;
-    linux:aarch64|linux:arm64) printf '%s' soe-agent-aarch64-linux-musl ;;
-    linux:x86_64|linux:amd64) printf '%s' soe-agent-x86_64-linux-musl ;;
-    *) printf '' ;;
-  esac
-}
-
-webrtc_name() {
-  os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
-  arch=$(uname -m 2>/dev/null | tr '[:upper:]' '[:lower:]')
-  case "$os:$arch" in
-    darwin:arm64) printf '%s' soe-webrtc-aarch64-macos ;;
-    darwin:x86_64) printf '%s' soe-webrtc-x86_64-macos ;;
-    linux:aarch64|linux:arm64) printf '%s' soe-webrtc-aarch64-linux ;;
-    linux:x86_64|linux:amd64) printf '%s' soe-webrtc-x86_64-linux ;;
-    *) printf '' ;;
-  esac
-}
-
-download_native() {
-  if ! command -v curl >/dev/null 2>&1; then
-    return 1
-  fi
-  if [ -n "\${SOE_NATIVE_URL:-}" ]; then
-    url="$SOE_NATIVE_URL"
-  else
-    name=$(native_name)
-    [ -n "$name" ] || return 1
-    url="$NATIVE_BASE_URL/$name"
-  fi
-  curl -fsSL --connect-timeout 5 --max-time ${releaseAssetDownloadTimeoutSeconds} -o "$NATIVE_FILE.tmp" "$url" >/dev/null 2>&1 || return 1
-  chmod +x "$NATIVE_FILE.tmp" || return 1
-  mv "$NATIVE_FILE.tmp" "$NATIVE_FILE"
-}
-
-download_webrtc() {
-  if ! command -v curl >/dev/null 2>&1; then
-    return 1
-  fi
-  if [ -n "\${SOE_WEBRTC_URL:-}" ]; then
-    url="$SOE_WEBRTC_URL"
-  else
-    name=$(webrtc_name)
-    [ -n "$name" ] || return 1
-    url="$WEBRTC_BASE_URL/$name"
-  fi
-  curl -fsSL --connect-timeout 5 --max-time ${releaseAssetDownloadTimeoutSeconds} -o "$WEBRTC_FILE.tmp" "$url" >/dev/null 2>&1 || return 1
-  chmod +x "$WEBRTC_FILE.tmp" || return 1
-  mv "$WEBRTC_FILE.tmp" "$WEBRTC_FILE"
-}
-
-start_webrtc() {
-  if [ ! -x "$WEBRTC_FILE" ]; then
-    download_webrtc || return 1
-  fi
-  "$WEBRTC_FILE" agent --base-url "$BASE_URL" --session "$SESSION_ID" >/dev/null 2>&1 &
-  : > "$WEBRTC_ACTIVE_FILE"
-}
-
-private_ips() {
-  if command -v ip >/dev/null 2>&1; then
-    ip -o -4 addr show scope global 2>/dev/null | awk '{ split($4, a, "/"); if (out) out = out "," a[1]; else out = a[1] } END { print out }'
-  elif command -v ifconfig >/dev/null 2>&1; then
-    ifconfig 2>/dev/null | awk '/inet / && $2 !~ /^127\\./ { if (out) out = out "," $2; else out = $2 } END { print out }'
-  else
-    printf ''
-  fi
-}
-
-latency_ms() {
-  if ! command -v curl >/dev/null 2>&1; then
-    printf ''
-    return
-  fi
-  total=$(curl -fsS -o /dev/null -w '%{time_total}' --connect-timeout 3 --max-time 8 "$BASE_URL/a" 2>/dev/null || printf '')
-  if [ -n "$total" ] && command -v awk >/dev/null 2>&1; then
-    printf '%s' "$total" | awk '{ printf "%d", ($1 * 1000) }'
-  else
-    printf ''
-  fi
-}
-
-probe_json() {
-  os_name=$(uname -s 2>/dev/null || printf unknown)
-  arch=$(uname -m 2>/dev/null || printf unknown)
-  host=$(hostname 2>/dev/null || printf '')
-  user=$(whoami 2>/dev/null || printf '')
-  cwd=$(pwd 2>/dev/null || printf '')
-  shell_name=\${SHELL:-}
-  os_version=''
-  cpu=''
-  cores=''
-  memory=''
-  if command -v sw_vers >/dev/null 2>&1; then
-    os_version=$(sw_vers -productVersion 2>/dev/null || printf '')
-  elif [ -r /etc/os-release ]; then
-    os_version=$(awk -F= '/^PRETTY_NAME=/{ gsub(/^"|"$/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || printf '')
-  fi
-  cpu=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || awk -F: '/model name/{ sub(/^ /, "", $2); print $2; exit }' /proc/cpuinfo 2>/dev/null || printf '')
-  cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || printf '')
-  memory=$(sysctl -n hw.memsize 2>/dev/null || awk '/MemTotal/{ print $2 * 1024; exit }' /proc/meminfo 2>/dev/null || printf '')
-  ips=$(private_ips)
-  latency=$(latency_ms)
-  native_supported=false
-  [ -n "$(native_name)" ] && native_supported=true
-  webrtc_supported=false
-  [ -n "$(webrtc_name)" ] && webrtc_supported=true
-  active_transport=relay
-  [ -f "$WEBRTC_ACTIVE_FILE" ] && active_transport=webrtc
-  printf '{'
-  printf '"session":"%s",' "$(json_value "$SESSION_ID")"
-  printf '"agent":{"kind":"posix-shell","version":"%s","pid":%s},' "$(json_value "$AGENT_VERSION")" "$$"
-  printf '"os":{"name":"%s","version":"%s","arch":"%s"},' "$(json_value "$os_name")" "$(json_value "$os_version")" "$(json_value "$arch")"
-  printf '"hardware":{"cpu":"%s","cores":"%s","memoryBytes":"%s"},' "$(json_value "$(first_line "$cpu")")" "$(json_value "$cores")" "$(json_value "$memory")"
-  printf '"runtime":{"shell":"%s","cwd":"%s","user":"%s","hostname":"%s","commands":{"curl":%s,"sh":%s,"bash":%s,"zsh":%s,"python3":%s,"node":%s,"bun":%s,"timeout":%s,"base64":%s}},' "$(json_value "$shell_name")" "$(json_value "$cwd")" "$(json_value "$user")" "$(json_value "$host")" "$(has_command curl)" "$(has_command sh)" "$(has_command bash)" "$(has_command zsh)" "$(has_command python3)" "$(has_command node)" "$(has_command bun)" "$(has_command timeout)" "$(has_command base64)"
-  printf '"network":{"baseUrl":"%s","baseUrlLatencyMs":"%s","privateIps":"%s"},' "$(json_value "$BASE_URL")" "$(json_value "$latency")" "$(json_value "$ips")"
-  printf '"supports":{"relay":true,"native":%s,"directHttp":false,"webrtc":%s,"webrtcSignaling":true},' "$native_supported" "$webrtc_supported"
-  printf '"activeTransport":"%s"' "$active_transport"
-  printf '}'
-}
-
-config_json() {
-  requested=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-  [ -n "$requested" ] || requested=auto
-  case "$requested" in
-    auto|native)
-      if download_native; then
-        UPGRADE_TO_NATIVE=1
-        printf '{"ok":true,"requested":"%s","active":"native","upgraded":true,"fallback":false,"reason":"native agent downloaded and will take over after this response"}' "$requested"
-      else
-        printf '{"ok":true,"requested":"%s","active":"relay","upgraded":false,"fallback":true,"reason":"native agent is not available on this machine"}' "$requested"
-      fi
-      ;;
-    relay)
-      printf '{"ok":true,"requested":"relay","active":"relay","upgraded":false,"fallback":false,"reason":"relay is already active"}'
-      ;;
-    direct)
-      if download_native; then
-        UPGRADE_TO_NATIVE=1
-        printf '{"ok":true,"requested":"direct","active":"native","upgraded":true,"fallback":true,"reason":"native driver downloaded; direct HTTP listener is not enabled yet"}'
-      else
-        printf '{"ok":true,"requested":"direct","active":"relay","upgraded":false,"fallback":true,"reason":"this POSIX agent does not run a direct HTTP listener yet"}'
-      fi
-      ;;
-    webrtc)
-      if start_webrtc; then
-        printf '{"ok":true,"requested":"webrtc","active":"webrtc","upgraded":true,"fallback":false,"reason":"WebRTC sidecar started; relay remains available as fallback"}'
-      else
-        printf '{"ok":true,"requested":"webrtc","active":"relay","upgraded":false,"fallback":true,"reason":"WebRTC sidecar is not available on this machine"}'
-      fi
-      ;;
-    *)
-      printf '{"ok":false,"requested":"%s","active":"relay","upgraded":false,"fallback":true,"reason":"unsupported transport"}' "$(json_value "$requested")"
-      return 1
-      ;;
-  esac
 }
 
 post_bye() {
@@ -290,38 +101,15 @@ while true; do
     continue
   fi
   command_id=$(header_value X-Command-Id "$headers_file")
-  command_type=$(header_value X-Command-Type "$headers_file")
-  [ -n "$command_type" ] || command_type=shell
   cwd=$(decode_b64 "$(header_value X-Command-Cwd-Base64 "$headers_file")")
   timeout_seconds=$(header_value X-Command-Timeout "$headers_file")
-  [ -n "$timeout_seconds" ] || timeout_seconds=900
+  [ -n "$timeout_seconds" ] || timeout_seconds=${defaultCommandTimeoutSeconds}
   result_file=$(mktemp)
   command_body=$(cat "$body_file")
-  case "$command_type" in
-    shell)
-      (run_shell "$command_body" "$cwd" "$timeout_seconds" "$result_file")
-      exit_code=$?
-      ;;
-    probe)
-      probe_json > "$result_file"
-      exit_code=0
-      ;;
-    config)
-      config_json "$command_body" > "$result_file"
-      exit_code=$?
-      ;;
-    *)
-      printf '{"ok":false,"reason":"unsupported command type"}' > "$result_file"
-      exit_code=1
-      ;;
-  esac
+  (run_shell "$command_body" "$cwd" "$timeout_seconds" "$result_file")
+  exit_code=$?
   curl -fsS --connect-timeout 5 --max-time 30 -X POST --data-binary "@$result_file" "$BASE_URL/api/sessions/$SESSION_ID/result/$command_id?exit=$exit_code" >/dev/null || true
   rm -f "$headers_file" "$body_file" "$result_file"
-  if [ "$UPGRADE_TO_NATIVE" = "1" ] && [ -x "$NATIVE_FILE" ]; then
-    SOE_NO_END_ON_EXIT=1
-    trap - INT TERM EXIT
-    exec "$NATIVE_FILE" --base-url "$BASE_URL" --session "$SESSION_ID"
-  fi
 done
 `;
 }

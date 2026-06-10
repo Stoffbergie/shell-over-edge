@@ -1,4 +1,5 @@
 import type { Env } from "../worker/env";
+import { defaultCommandTimeoutSeconds, maxCommandTimeoutSeconds } from "./config";
 
 const textDecoder = new TextDecoder();
 
@@ -46,6 +47,6 @@ export function cleanString(value: unknown, maxLength: number): string {
 
 export function normalizeTimeout(value: unknown): number {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return 900;
-  return Math.min(Math.max(Math.trunc(parsed), 1), 3600);
+  if (!Number.isFinite(parsed)) return defaultCommandTimeoutSeconds;
+  return Math.min(Math.max(Math.trunc(parsed), 1), maxCommandTimeoutSeconds);
 }
