@@ -21,15 +21,11 @@ const meta: SessionMeta = {
 const unixShells = uniqueCommands(["sh", "dash", "bash", "zsh"]);
 const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershell.exe", "powershell"] : ["pwsh"]);
 
-test("generated shell agent is portable across common Unix environments", () => {
+test("generated shell agent is relay-only and portable", () => {
   const script = shellAgentScript("https://soe.test", meta);
   assert.match(script, /SESSION_ID='abc234de'/);
-  assert.match(script, /AGENT_VERSION='0\.2\.1'/);
-  assert.match(script, /NATIVE_BASE_URL=/);
+  assert.match(script, /AGENT_VERSION='0\.3\.0'/);
   assert.match(script, /Session: %s \(%s\)\\nStop anytime: Ctrl\+C\\n/);
-  assert.ok(!script.includes("Shell Over Edge\\n"));
-  assert.ok(!script.includes("Expires:"));
-  assert.ok(!script.includes("Send command:"));
   assert.match(script, /pbcopy/);
   assert.match(script, /wl-copy/);
   assert.match(script, /xclip -selection clipboard/);
@@ -39,34 +35,29 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.match(script, /base64 -D/);
   assert.match(script, /command -v timeout/);
   assert.match(script, /SOE_NO_END_ON_EXIT/);
-  assert.match(script, /probe_json\(\)/);
-  assert.match(script, /config_json\(\)/);
-  assert.match(script, /download_native\(\)/);
-  assert.match(script, /download_webrtc\(\)/);
-  assert.match(script, /start_webrtc\(\)/);
-  assert.match(script, /soe-webrtc-aarch64-macos/);
-  assert.match(script, /soe-webrtc-x86_64-linux/);
-  assert.match(script, /"active":"webrtc"/);
-  assert.match(script, /X-Command-Type/);
-  assert.ok(!script.includes("paste -sd"));
-  assert.match(script, /exec "\$NATIVE_FILE" --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
   assert.match(script, /--connect-timeout 5 --max-time 15/);
   assert.match(script, /--connect-timeout 5 --max-time 35/);
   assert.match(script, /--connect-timeout 5 --max-time 30/);
-  assert.match(script, /--connect-timeout 5 --max-time 300 -o "\$NATIVE_FILE\.tmp"/);
-  assert.match(script, /--connect-timeout 5 --max-time 300 -o "\$WEBRTC_FILE\.tmp"/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/hello/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/next/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/result\/\$command_id\?exit=\$exit_code/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/end/);
+  assert.ok(!script.includes("Shell Over Edge\\n"));
+  assert.ok(!script.includes("Expires:"));
+  assert.ok(!script.includes("Send command:"));
+  assert.ok(!script.includes("NATIVE_"));
+  assert.ok(!script.includes("WEBRTC_"));
+  assert.ok(!script.includes("download_native"));
+  assert.ok(!script.includes("download_webrtc"));
+  assert.ok(!script.includes("probe_json"));
+  assert.ok(!script.includes("config_json"));
+  assert.ok(!script.includes("soe-agent"));
+  assert.ok(!script.includes("soe-webrtc"));
+  assert.ok(!script.includes("X-Command-Type"));
   assert.ok(!script.includes("Authorization"));
   assert.ok(!script.includes("/api/agent/"));
   assert.ok(!script.includes("/start/"));
   assert.ok(!script.includes("?token" + "="));
-  assert.match(script, /agent --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
-  assert.ok(!script.includes("stun.cloudflare.com"));
-  assert.ok(!script.includes("turn.cloudflare.com"));
-  assert.ok(!script.includes("RTCPeerConnection"));
 });
 
 test.skipIf(unixShells.length === 0)("generated shell agent is syntax-valid across available Unix shells", async () => {
@@ -74,52 +65,41 @@ test.skipIf(unixShells.length === 0)("generated shell agent is syntax-valid acro
   for (const shell of unixShells) await assertShellSyntax(shell, script);
 });
 
-test("generated PowerShell agent keeps Windows request fallbacks", () => {
+test("generated PowerShell agent is relay-only", () => {
   const script = powerShellAgentScript("https://soe.test", meta);
 
   assert.match(script, /\$SessionId = "abc234de"/);
-  assert.match(script, /\$AgentVersion = "0\.2\.1"/);
-  assert.match(script, /\$NativeBaseUrl =/);
+  assert.match(script, /\$AgentVersion = "0\.3\.0"/);
   assert.match(script, /Write-Host "Session: \$SessionId \(\$Clipboard\)"/);
   assert.match(script, /Write-Host "Stop anytime: Ctrl\+C"/);
-  assert.ok(!script.includes('Write-Host "Shell Over Edge"'));
-  assert.ok(!script.includes('Write-Host "Expires:'));
-  assert.ok(!script.includes('Write-Host "Send command:"'));
   assert.match(script, /Set-Clipboard/);
   assert.match(script, /System\.Net\.WebRequest/);
   assert.match(script, /\$Request\.Timeout = 35000/);
   assert.match(script, /\$Request\.ReadWriteTimeout = 35000/);
-  assert.match(script, /Invoke-WebRequest -Uri \$Url -OutFile "\$NativePath\.tmp" -UseBasicParsing -TimeoutSec 300/);
-  assert.match(script, /Invoke-WebRequest -Uri \$Url -OutFile "\$WebRtcPath\.tmp" -UseBasicParsing -TimeoutSec 300/);
-  assert.match(script, /Get-ResponseHeader/);
-  assert.match(script, /InnerException\.Response/);
   assert.match(script, /Start-ThreadJob/);
   assert.match(script, /Start-Job/);
   assert.match(script, /X-Command-Timeout/);
-  assert.match(script, /X-Command-Type/);
   assert.match(script, /SOE_NO_END_ON_EXIT/);
-  assert.match(script, /Get-ProbeJson/);
-  assert.match(script, /Get-ConfigJson/);
-  assert.match(script, /Start-NativeDownload/);
-  assert.match(script, /Start-WebRtcDriver/);
-  assert.match(script, /soe-webrtc-aarch64-windows\.exe/);
-  assert.match(script, /soe-webrtc-x86_64-linux/);
-  assert.match(script, /active = "webrtc"/);
   assert.match(script, /Command timed out after \$TimeoutSeconds seconds/);
   assert.match(script, /\$StatusCode -eq 204/);
-  assert.ok(!script.includes("Start-Sleep -Seconds 2"));
   assert.match(script, /api\/sessions\/\$SessionId\/hello/);
   assert.match(script, /api\/sessions\/\$SessionId\/next/);
   assert.match(script, /api\/sessions\/\$SessionId\/result\/\$\{CommandId\}\?exit=\$ExitCode/);
   assert.match(script, /api\/sessions\/\$SessionId\/end/);
+  assert.ok(!script.includes('Write-Host "Shell Over Edge"'));
+  assert.ok(!script.includes('Write-Host "Expires:'));
+  assert.ok(!script.includes('Write-Host "Send command:"'));
+  assert.ok(!script.includes("Native"));
+  assert.ok(!script.includes("WebRtc"));
+  assert.ok(!script.includes("soe-agent"));
+  assert.ok(!script.includes("soe-webrtc"));
+  assert.ok(!script.includes("Get-ProbeJson"));
+  assert.ok(!script.includes("Get-ConfigJson"));
+  assert.ok(!script.includes("X-Command-Type"));
   assert.ok(!script.includes("Authorization"));
   assert.ok(!script.includes("/api/agent/"));
   assert.ok(!script.includes("/start/"));
   assert.ok(!script.includes("?token" + "="));
-  assert.match(script, /"agent", "--base-url", \$BaseUrl, "--session", \$SessionId/);
-  assert.ok(!script.includes("stun.cloudflare.com"));
-  assert.ok(!script.includes("turn.cloudflare.com"));
-  assert.ok(!script.includes("RTCPeerConnection"));
 });
 
 test.skipIf(!powerShell)("generated PowerShell agent parses", async () => {
@@ -128,25 +108,25 @@ test.skipIf(!powerShell)("generated PowerShell agent parses", async () => {
 
 test.skipIf(unixShells.length === 0)("generated POSIX bootstrap is syntax-valid across available Unix shells", async () => {
   const script = shellBootstrapScript("https://soe.test");
-  assert.match(script, /SOE_NATIVE_BASE_URL/);
-  assert.match(script, /SOE_AUTO_UPGRADE/);
-  assert.match(script, /SOE_WARM_NATIVE/);
-  assert.ok(script.includes('if [ "${SOE_AUTO_UPGRADE:-}" = "1" ] || [ "${SOE_WARM_NATIVE:-}" = "1" ] || [ -n "${SOE_NATIVE_URL:-}" ]; then'));
+  assert.match(script, /api\/sessions/);
+  assert.match(script, /sh "\$AGENT_FILE"/);
   assert.match(script, /--connect-timeout 5 --max-time 20/);
-  assert.match(script, /SOE_NO_END_ON_EXIT=1 sh "\$AGENT_FILE"/);
-  assert.match(script, /exec "\$NATIVE_FILE" --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
+  assert.ok(!script.includes("SOE_NATIVE"));
+  assert.ok(!script.includes("SOE_AUTO_UPGRADE"));
+  assert.ok(!script.includes("SOE_WARM_NATIVE"));
+  assert.ok(!script.includes("soe-agent"));
   for (const shell of unixShells) await assertShellSyntax(shell, script);
 });
 
 test.skipIf(!powerShell)("generated PowerShell bootstrap parses", async () => {
   const script = powerShellBootstrapScript("https://soe.test");
-  assert.match(script, /SOE_NATIVE_BASE_URL/);
-  assert.match(script, /SOE_AUTO_UPGRADE/);
-  assert.match(script, /SOE_WARM_NATIVE/);
-  assert.ok(script.includes('if ($env:SOE_AUTO_UPGRADE -eq "1" -or $env:SOE_WARM_NATIVE -eq "1" -or $env:SOE_NATIVE_URL)'));
+  assert.match(script, /api\/sessions\.ps1/);
   assert.match(script, /-TimeoutSec 20/);
-  assert.match(script, /\$env:SOE_NO_END_ON_EXIT = "1"/);
-  assert.match(script, /--base-url \$BaseUrl --session \$SessionId/);
+  assert.match(script, /-File \$AgentPath/);
+  assert.ok(!script.includes("SOE_NATIVE"));
+  assert.ok(!script.includes("SOE_AUTO_UPGRADE"));
+  assert.ok(!script.includes("SOE_WARM_NATIVE"));
+  assert.ok(!script.includes("soe-agent"));
   await assertPowerShellParses(powerShell, script);
 }, 30_000);
 

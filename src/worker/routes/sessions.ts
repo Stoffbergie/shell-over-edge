@@ -2,12 +2,11 @@ import type { Context, Hono } from "hono";
 import { powerShellAgentScript } from "../../agent/powershell";
 import { shellAgentScript } from "../../agent/shell";
 import type { SessionMeta } from "../../domain/session";
-import { maxCommandBytes, maxConfigBytes, maxDirectSignalBytes, sessionTtlMs } from "../../shared/config";
+import { defaultCommandTimeoutSeconds, maxCommandBytes, sessionTtlMs } from "../../shared/config";
 import { randomSessionCode } from "../../shared/crypto";
-import { BadRequestError, cleanString, jsonResponse, normalizeTimeout, publicBaseUrl, readLimitedText, textResponse } from "../../shared/http";
+import { BadRequestError, cleanString, normalizeTimeout, publicBaseUrl, readLimitedText, textResponse } from "../../shared/http";
 import { logInfo } from "../../shared/log";
 import type { Env } from "../env";
-import { getIceServers } from "../services/ice-servers";
 import { sessionBridge } from "../services/session-bridge";
 import {
   codeKey,
@@ -31,12 +30,6 @@ export function registerSessionRoutes(app: SessionApp): void {
   app.post("/api/sessions", (c) => createSession(c, "shell"));
   app.post("/api/sessions.ps1", (c) => createSession(c, "powershell"));
   app.post("/api/sessions/:id/send", sendCommand);
-  app.get("/api/sessions/:id/probe", probeSession);
-  app.post("/api/sessions/:id/probe", probeSession);
-  app.post("/api/sessions/:id/config", configureSession);
-  app.get("/api/sessions/:id/ice", iceServers);
-  app.post("/api/sessions/:id/signals", publishSignal);
-  app.get("/api/sessions/:id/signals", listSignals);
   app.post("/api/sessions/:id/hello", agentHello);
   app.get("/api/sessions/:id/next", agentNext);
   app.post("/api/sessions/:id/result/:commandId", agentResult);
@@ -82,53 +75,6 @@ async function sendCommand(c: SessionContext): Promise<Response> {
     method: "POST",
     body: JSON.stringify(input)
   });
-}
-
-async function probeSession(c: SessionContext): Promise<Response> {
-  const guard = await requireSession(c.env, c.req.param("id"));
-  if ("response" in guard) return guard.response;
-
-  return sessionBridge(c.env, guard.meta.id).fetch("https://session/probe", {
-    method: "POST"
-  });
-}
-
-async function configureSession(c: SessionContext): Promise<Response> {
-  const guard = await requireSession(c.env, c.req.param("id"));
-  if ("response" in guard) return guard.response;
-
-  return sessionBridge(c.env, guard.meta.id).fetch("https://session/config", {
-    method: "POST",
-    body: await readConfigInput(c.req.raw)
-  });
-}
-
-async function iceServers(c: SessionContext): Promise<Response> {
-  const guard = await requireSession(c.env, c.req.param("id"));
-  if ("response" in guard) return guard.response;
-  return jsonResponse(await getIceServers(c.env));
-}
-
-async function publishSignal(c: SessionContext): Promise<Response> {
-  const guard = await requireSession(c.env, c.req.param("id"));
-  if ("response" in guard) return guard.response;
-
-  const body = await readLimitedText(c.req.raw, maxDirectSignalBytes);
-  return sessionBridge(c.env, guard.meta.id).fetch("https://session/signals", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body
-  });
-}
-
-async function listSignals(c: SessionContext): Promise<Response> {
-  const guard = await requireSession(c.env, c.req.param("id"));
-  if ("response" in guard) return guard.response;
-
-  const url = new URL(c.req.url);
-  return sessionBridge(c.env, guard.meta.id).fetch(`https://session/signals${url.search}`);
 }
 
 async function agentHello(c: SessionContext): Promise<Response> {
@@ -205,7 +151,7 @@ async function resolveSessionId(env: Env, id: string | undefined): Promise<strin
 async function readCommandInput(request: Request): Promise<{ body: string; cwd: string; timeoutSeconds: number }> {
   const url = new URL(request.url);
   const raw = (await readLimitedText(request, maxCommandBytes)).trim();
-  const defaultTimeout = normalizeTimeout(url.searchParams.get("timeout") || request.headers.get("x-timeout-seconds") || 30);
+  const defaultTimeout = normalizeTimeout(url.searchParams.get("timeout") || request.headers.get("x-timeout-seconds") || defaultCommandTimeoutSeconds);
   if (!raw.startsWith("{")) {
     return { body: raw, cwd: "", timeoutSeconds: defaultTimeout };
   }
@@ -223,27 +169,4 @@ async function readCommandInput(request: Request): Promise<{ body: string; cwd: 
     cwd: cleanString(payload.cwd, 500),
     timeoutSeconds: normalizeTimeout(payload.timeoutSeconds ?? payload.timeout ?? defaultTimeout)
   };
-}
-
-async function readConfigInput(request: Request): Promise<string> {
-  const raw = (await readLimitedText(request, maxConfigBytes)).trim();
-  if (!raw) return "auto";
-
-  let value = raw;
-  if (raw.startsWith("{")) {
-    type ConfigPayload = { transport?: unknown; mode?: unknown; target?: unknown };
-    let payload: ConfigPayload;
-    try {
-      payload = JSON.parse(raw) as ConfigPayload;
-    } catch {
-      throw new BadRequestError("Invalid JSON config payload");
-    }
-    value = cleanString(payload.transport ?? payload.mode ?? payload.target, 40);
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "http") return "direct";
-  if (normalized === "p2p") return "webrtc";
-  if (["auto", "relay", "native", "direct", "webrtc"].includes(normalized)) return normalized;
-  throw new BadRequestError(`Unsupported transport config: ${normalized || "empty"}`);
 }

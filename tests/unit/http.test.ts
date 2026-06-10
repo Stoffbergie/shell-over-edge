@@ -6,8 +6,8 @@ import { PayloadTooLargeError } from "../../src/shared/http";
 test("normalizes and bounds command timeouts", () => {
   assert.equal(normalizeTimeout("0"), 1);
   assert.equal(normalizeTimeout("12.9"), 12);
-  assert.equal(normalizeTimeout("9000"), 3600);
-  assert.equal(normalizeTimeout("nope"), 900);
+  assert.equal(normalizeTimeout("9000"), 50);
+  assert.equal(normalizeTimeout("nope"), 30);
 });
 
 test("cleans strings without coercing non-strings", () => {

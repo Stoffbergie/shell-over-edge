@@ -2,8 +2,6 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
-import type { Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { test } from "vitest";
 import { strict as assert } from "node:assert";
@@ -18,7 +16,7 @@ const sh = findCommand("sh");
 const curl = findCommand("curl");
 const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershell.exe", "powershell"] : ["pwsh"]);
 
-test.skipIf(!sh || !curl)("generated POSIX agent script connects, runs a command, and streams text back through send", async () => {
+test.skipIf(!sh || !curl)("generated POSIX agent connects, runs a command, and returns text through send", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
   const dir = await mkdtemp(join(tmpdir(), "soe-posix-e2e-"));
@@ -45,7 +43,7 @@ test.skipIf(!sh || !curl)("generated POSIX agent script connects, runs a command
   }
 });
 
-test.skipIf(!sh || !curl)("POSIX bootstrap starts relay immediately when native download is unavailable", async () => {
+test.skipIf(!sh || !curl)("POSIX bootstrap starts the relay agent only", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
   const dir = await mkdtemp(join(tmpdir(), "soe-posix-bootstrap-e2e-"));
@@ -53,13 +51,15 @@ test.skipIf(!sh || !curl)("POSIX bootstrap starts relay immediately when native 
   let output = () => "";
   try {
     const script = await fetchText(`${server.baseUrl}/a`);
+    assert.ok(!script.includes("SOE_NATIVE"));
+    assert.ok(!script.includes("SOE_AUTO_UPGRADE"));
+    assert.ok(!script.includes("SOE_WARM_NATIVE"));
     const scriptPath = join(dir, "bootstrap.sh");
     await writeFile(scriptPath, script, { mode: 0o700 });
     agent = spawn(sh, [scriptPath], {
       cwd: dir,
       env: {
         ...process.env,
-        SOE_NATIVE_URL: "http://127.0.0.1:9/soe-agent",
         NO_PROXY: "127.0.0.1,localhost",
         no_proxy: "127.0.0.1,localhost"
       }
@@ -70,6 +70,7 @@ test.skipIf(!sh || !curl)("POSIX bootstrap starts relay immediately when native 
     const result = await sendCommand(server.baseUrl, id, "printf soe-bootstrap-e2e", diagnostics(output, server));
     assert.equal(result.status, 200);
     assert.equal(result.text, "soe-bootstrap-e2e");
+    assert.equal(server.requests.some((request) => request.path.includes("native") || request.path.includes("webrtc")), false);
 
     await endSession(server.baseUrl, id);
     await waitForExit(agent, 10_000, output);
@@ -81,174 +82,7 @@ test.skipIf(!sh || !curl)("POSIX bootstrap starts relay immediately when native 
   }
 });
 
-test.skipIf(!sh || !curl)("POSIX bootstrap serves relay while native download is still running", async () => {
-  const fixture = createTestEnv();
-  const server = await startAppServer(app, fixture);
-  const native = await startHangingServer();
-  const dir = await mkdtemp(join(tmpdir(), "soe-posix-bootstrap-slow-native-"));
-  let agent: ReturnType<typeof spawn> | undefined;
-  let output = () => "";
-  try {
-    const script = await fetchText(`${server.baseUrl}/a`);
-    const scriptPath = join(dir, "bootstrap.sh");
-    await writeFile(scriptPath, script, { mode: 0o700 });
-    agent = spawn(sh, [scriptPath], {
-      cwd: dir,
-      env: {
-        ...process.env,
-        SOE_WARM_NATIVE: "1",
-        SOE_NATIVE_URL: native.url,
-        NO_PROXY: "127.0.0.1,localhost",
-        no_proxy: "127.0.0.1,localhost"
-      }
-    });
-    output = captureOutput(agent);
-
-    const id = await waitForSessionId(output, 10_000);
-    await waitForNativeRequest(native, 10_000);
-    const result = await sendCommand(server.baseUrl, id, "printf soe-bootstrap-warm", diagnostics(output, server));
-    assert.equal(result.status, 200);
-    assert.equal(result.text, "soe-bootstrap-warm");
-
-    await endSession(server.baseUrl, id);
-    await waitForExit(agent, 10_000, output);
-  } finally {
-    if (agent && agent.exitCode === null) agent.kill();
-    await native.close();
-    await removeDir(dir);
-    await server.close();
-  }
-});
-
-test.skipIf(!sh || !curl)("POSIX bootstrap does not download native assets by default", async () => {
-  const fixture = createTestEnv();
-  const server = await startAppServer(app, fixture);
-  const dir = await mkdtemp(join(tmpdir(), "soe-posix-bootstrap-default-"));
-  let agent: ReturnType<typeof spawn> | undefined;
-  let output = () => "";
-  try {
-    const script = await fetchText(`${server.baseUrl}/a`);
-    const scriptPath = join(dir, "bootstrap.sh");
-    await writeFile(scriptPath, script, { mode: 0o700 });
-    agent = spawn(sh, [scriptPath], {
-      cwd: dir,
-      env: {
-        ...process.env,
-        SOE_NATIVE_BASE_URL: `${server.baseUrl}/native-assets`,
-        NO_PROXY: "127.0.0.1,localhost",
-        no_proxy: "127.0.0.1,localhost"
-      }
-    });
-    output = captureOutput(agent);
-
-    const id = await waitForSessionId(output, 10_000);
-    const result = await sendCommand(server.baseUrl, id, "printf soe-bootstrap-default", diagnostics(output, server));
-    assert.equal(result.status, 200);
-    assert.equal(result.text, "soe-bootstrap-default");
-    assert.equal(server.requests.some((request) => request.path.includes("/native-assets/")), false);
-
-    await endSession(server.baseUrl, id);
-    await waitForExit(agent, 10_000, output);
-  } finally {
-    if (agent && agent.exitCode === null) agent.kill();
-    await removeDir(dir);
-    await server.close();
-  }
-});
-
-test.skipIf(process.platform === "win32" || !sh || !curl)("generated POSIX agent downloads native driver on config request", async () => {
-  const fixture = createTestEnv();
-  const server = await startAppServer(app, fixture);
-  const native = await startNativeAssetServer();
-  const dir = await mkdtemp(join(tmpdir(), "soe-posix-config-native-"));
-  let agent: ReturnType<typeof spawn> | undefined;
-  let output = () => "";
-  try {
-    const session = await createSession(server.baseUrl);
-    const scriptPath = join(dir, "agent.sh");
-    await writeFile(scriptPath, session.script, { mode: 0o700 });
-    agent = spawn(sh, [scriptPath], {
-      cwd: dir,
-      env: {
-        ...process.env,
-        SOE_NATIVE_URL: native.url,
-        NO_PROXY: "127.0.0.1,localhost",
-        no_proxy: "127.0.0.1,localhost"
-      }
-    });
-    output = captureOutput(agent);
-
-    const config = await controlRequest(server.baseUrl, session.id, "config", "native", diagnostics(output, server));
-    assert.equal(config.status, 200);
-    const payload = JSON.parse(config.text) as { requested: string; active: string; upgraded: boolean; fallback: boolean };
-    assert.equal(payload.requested, "native");
-    assert.equal(payload.active, "native");
-    assert.equal(payload.upgraded, true);
-    assert.equal(payload.fallback, false);
-    assert.ok(native.requests.length > 0);
-
-    await waitForExit(agent, 10_000, output);
-    assert.match(output(), /fake-native --base-url /);
-  } finally {
-    if (agent && agent.exitCode === null) agent.kill();
-    await native.close();
-    await removeDir(dir);
-    await server.close();
-  }
-});
-
-test.skipIf(process.platform === "win32" || !sh || !curl)("generated POSIX agent starts WebRTC sidecar on config request", async () => {
-  const fixture = createTestEnv();
-  const server = await startAppServer(app, fixture);
-  const sidecar = await startWebRtcAssetServer();
-  const dir = await mkdtemp(join(tmpdir(), "soe-posix-config-webrtc-"));
-  let agent: ReturnType<typeof spawn> | undefined;
-  let output = () => "";
-  try {
-    const session = await createSession(server.baseUrl);
-    const scriptPath = join(dir, "agent.sh");
-    await writeFile(scriptPath, session.script, { mode: 0o700 });
-    agent = spawn(sh, [scriptPath], {
-      cwd: dir,
-      env: {
-        ...process.env,
-        SOE_WEBRTC_URL: sidecar.url,
-        NO_PROXY: "127.0.0.1,localhost",
-        no_proxy: "127.0.0.1,localhost"
-      }
-    });
-    output = captureOutput(agent);
-
-    const config = await controlRequest(server.baseUrl, session.id, "config", "webrtc", diagnostics(output, server));
-    assert.equal(config.status, 200);
-    const payload = JSON.parse(config.text) as { requested: string; active: string; upgraded: boolean; fallback: boolean };
-    assert.equal(payload.requested, "webrtc");
-    assert.equal(payload.active, "webrtc");
-    assert.equal(payload.upgraded, true);
-    assert.equal(payload.fallback, false);
-    assert.ok(sidecar.requests.length > 0);
-
-    const probe = await controlRequest(server.baseUrl, session.id, "probe", "", diagnostics(output, server));
-    assert.equal(probe.status, 200);
-    const probePayload = JSON.parse(probe.text) as { activeTransport: string; supports: { webrtc: boolean } };
-    assert.equal(probePayload.activeTransport, "webrtc");
-    assert.equal(probePayload.supports.webrtc, true);
-
-    const result = await sendCommand(server.baseUrl, session.id, "printf relay-still-works", diagnostics(output, server));
-    assert.equal(result.status, 200);
-    assert.equal(result.text, "relay-still-works");
-
-    await endSession(server.baseUrl, session.id);
-    await waitForExit(agent, 10_000, output);
-  } finally {
-    if (agent && agent.exitCode === null) agent.kill();
-    await sidecar.close();
-    await removeDir(dir);
-    await server.close();
-  }
-});
-
-test.skipIf(!sh || !curl)("generated POSIX agent script drains parallel relay sends without result mixups", async () => {
+test.skipIf(!sh || !curl)("generated POSIX agent drains parallel relay sends without result mixups", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
   const dir = await mkdtemp(join(tmpdir(), "soe-posix-parallel-e2e-"));
@@ -315,7 +149,7 @@ test.skipIf(process.platform === "win32" || !sh || !curl)("generated POSIX agent
   }
 });
 
-test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell agent script connects, runs a command, and streams text back through send", async () => {
+test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell agent connects, runs a command, and returns text through send", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
   const dir = await mkdtemp(join(tmpdir(), "soe-powershell-e2e-"));
@@ -414,16 +248,6 @@ async function sendCommand(baseUrl: string, id: string, body: string, details = 
   return result;
 }
 
-async function controlRequest(baseUrl: string, id: string, name: "probe" | "config", body: string, details = () => ""): Promise<{ status: number; text: string }> {
-  const response = await fetch(`${baseUrl}/api/sessions/${id}/${name}`, {
-    method: name === "probe" ? "GET" : "POST",
-    body: name === "probe" ? undefined : body
-  });
-  const result = { status: response.status, text: await response.text() };
-  assert.notEqual(result.status, 504, `${result.text}\n${details()}`);
-  return result;
-}
-
 async function endSession(baseUrl: string, id: string): Promise<void> {
   const response = await fetch(`${baseUrl}/api/sessions/${id}/end`, { method: "POST" });
   assert.equal(response.status, 200);
@@ -454,99 +278,6 @@ async function waitForSessionId(output: () => string, timeoutMs: number): Promis
     await sleep(50);
   }
   throw new Error(`Bootstrap did not print a session id\n${output()}`);
-}
-
-type HangingServer = {
-  close: () => Promise<void>;
-  requests: string[];
-  url: string;
-};
-
-type NativeAssetServer = {
-  close: () => Promise<void>;
-  requests: string[];
-  url: string;
-};
-
-type WebRtcAssetServer = NativeAssetServer;
-
-async function startNativeAssetServer(): Promise<NativeAssetServer> {
-  const requests: string[] = [];
-  const body = "#!/bin/sh\nprintf 'fake-native %s\\n' \"$*\"\n";
-  const server = createServer((request, response) => {
-    requests.push(request.url || "/");
-    response.writeHead(200, {
-      "Content-Type": "application/octet-stream",
-      "Content-Length": Buffer.byteLength(body)
-    });
-    response.end(body);
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Could not start native asset server");
-  return {
-    close: async () => {
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    },
-    requests,
-    url: `http://127.0.0.1:${address.port}/soe-agent`
-  };
-}
-
-async function startWebRtcAssetServer(): Promise<WebRtcAssetServer> {
-  const requests: string[] = [];
-  const body = "#!/bin/sh\nexit 0\n";
-  const server = createServer((request, response) => {
-    requests.push(request.url || "/");
-    response.writeHead(200, {
-      "Content-Type": "application/octet-stream",
-      "Content-Length": Buffer.byteLength(body)
-    });
-    response.end(body);
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Could not start WebRTC asset server");
-  return {
-    close: async () => {
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    },
-    requests,
-    url: `http://127.0.0.1:${address.port}/soe-webrtc`
-  };
-}
-
-async function startHangingServer(): Promise<HangingServer> {
-  const requests: string[] = [];
-  const sockets = new Set<Socket>();
-  const server = createServer((request) => {
-    requests.push(request.url || "/");
-    request.resume();
-  });
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Could not start hanging server");
-  return {
-    close: async () => {
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    },
-    requests,
-    url: `http://127.0.0.1:${address.port}/soe-agent`
-  };
-}
-
-async function waitForNativeRequest(server: HangingServer, timeoutMs: number): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (server.requests.length > 0) return;
-    await sleep(25);
-  }
-  throw new Error("Native download did not start");
 }
 
 async function removeDir(dir: string): Promise<void> {

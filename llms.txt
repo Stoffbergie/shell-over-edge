@@ -1,129 +1,70 @@
 # Shell Over Edge
 
-> Reach any shell from anywhere. Production base URL: `https://soe.stoff.dev`.
+Shell Over Edge gives temporary shell access through a simple HTTPS relay.
 
-Shell Over Edge creates short-lived 8-character session codes. A bootstrap starts a generated relay agent immediately and can warm a native agent download in the background. The agent long-polls the Worker for commands, executes them locally, then posts plain text output back. `/config webrtc` starts an optional `soe-webrtc` sidecar for RTCDataChannel commands while keeping relay available.
+## Core Flow
 
-## Public API
+1. Ask the user to start an agent on the target machine.
+2. Read the 8-character session code.
+3. Send commands with `/send`.
+4. Treat successful `/send` responses as plain text command output.
+5. Close the session with `/end`.
 
-- Create POSIX bootstrap: `GET /a`
-- Create PowerShell bootstrap: `GET /a.ps1`
-- Create POSIX session: `POST /api/sessions`
-- Create PowerShell session: `POST /api/sessions.ps1`
-- Probe machine and transport support: `GET /api/sessions/<code>/probe`
-- Configure transport: `POST /api/sessions/<code>/config`
-- Send command: `POST /api/sessions/<code>/send`
-- End session: `POST /api/sessions/<code>/end`
+## Start Agents
 
-## Direct Internals
-
-- Get ICE config: `GET /api/sessions/<code>/ice`
-- Publish direct signal: `POST /api/sessions/<code>/signals`
-- List direct signals: `GET /api/sessions/<code>/signals?role=agent`
-
-## Quick Use
+POSIX:
 
 ```sh
 curl -sS https://soe.stoff.dev/a | sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'pwd'
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end
 ```
+
+PowerShell:
 
 ```powershell
 irm https://soe.stoff.dev/a.ps1 | iex
-curl.exe -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data "pwd"
-curl.exe -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end
 ```
 
-## Command Payloads
+## API
 
-Default `/send` body is raw text and returns raw command output.
+- `GET /a`: POSIX bootstrap.
+- `GET /a.ps1`: PowerShell bootstrap.
+- `POST /api/sessions`: POSIX relay agent script.
+- `POST /api/sessions.ps1`: PowerShell relay agent script.
+- `POST /api/sessions/<code>/send`: send a command.
+- `POST /api/sessions/<code>/end`: close the session.
 
-Use JSON only when setting options:
-
-```json
-{"body":"pwd","cwd":"/tmp","timeoutSeconds":30}
-```
-
-`timeout` is also accepted. Timeouts are clamped to 1-3600 seconds. The synchronous `/send` waits up to the platform-safe bridge wait and returns `504` if no result arrives.
-
-## Probe And Config
-
-Call `/probe` after receiving a session code. It returns JSON from the running agent with OS, hardware, runtime command availability, coarse network stats, active transport, and support flags for `relay`, `native`, `directHttp`, `webrtc`, and `webrtcSignaling`.
-
-Use `/config` as the only upgrade door. Plain text bodies are preferred:
+Raw command:
 
 ```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/config --data 'native'
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/config --data 'webrtc'
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'pwd'
 ```
 
-JSON is also accepted:
-
-```json
-{"transport":"native"}
-```
-
-Valid values are `auto`, `relay`, `native`, `direct`, and `webrtc`. The response is JSON with `requested`, `active`, `upgraded`, `fallback`, and `reason` fields. If a requested transport cannot activate, keep using `/send` with the reported active fallback.
-
-When `/config webrtc` returns `active: "webrtc"`, use the helper binary for DataChannel commands:
+Command with options:
 
 ```sh
-soe-webrtc send --base-url https://soe.stoff.dev --session <code> --body 'pwd'
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send \
+  --data '{"body":"pwd","cwd":"/tmp","timeoutSeconds":30}'
 ```
 
-## Direct Upgrade
+End:
 
-The relay route is the universal fallback. Rich helpers should start with `/probe` and `/config`. Driver-level helpers can still use the public service as rendezvous: fetch ICE config when using WebRTC, exchange short-lived direct signals, open an RTCDataChannel, then fall back to `/send` if direct fails.
-
-HTTP direct signal payload:
-
-```json
-{"role":"agent","transport":"http","url":"http://127.0.0.1:9000/command","priority":1,"ttlSeconds":60}
+```sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end
 ```
 
-WebRTC offer signal payload:
+## Rules
 
-```json
-{"role":"client","transport":"webrtc","data":{"type":"offer","sdp":"v=0\r\n"},"priority":1,"ttlSeconds":60}
-```
+- Do not use bearer tokens or URL tokens.
+- Do not invent session codes.
+- Do not call retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, or `/connect.sh`.
+- Do not expect JSON from `/send`; command output is plain text.
+- Prefer raw command bodies unless `cwd` or timeout control is needed.
+- Keep commands explicit, scoped, and reversible.
+- Close sessions when done.
 
-Direct command endpoints should accept the same JSON command payload and return plain command output with `X-Exit-Code` when available.
+## Limits
 
-## Invariants
-
-- Sessions are short code capabilities.
-- The response header `X-Session-Id` contains the code for newly created sessions.
-- Generated agents print the code and copy it to the clipboard when possible.
-- The bootstrap only downloads native binaries when `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, `SOE_NATIVE_URL` is set, or `/config native` asks for one.
-- `/config webrtc` downloads and starts a `soe-webrtc-*` sidecar such as `soe-webrtc-aarch64-macos`, `soe-webrtc-x86_64-linux`, or `soe-webrtc-x86_64-windows.exe`.
-- Most responses are plain text by design.
-- `/probe` and `/config` intentionally return JSON because they are machine-readable control endpoints.
-- No bearer tokens, helper tokens, agent tokens, URL tokens, or auth headers are used in the current API.
-- Generated curl-first agents do not open inbound direct listeners by default.
-- Retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, and `/connect.sh` are invalid.
-- Command body limit: 64 KB.
-- Result body limit: 1 MB.
-- Direct signal body limit: 32 KB.
-- Direct signal TTL: 60 seconds by default, 120 seconds max.
 - Session TTL: 2 hours.
-- Expired session cleanup retention: 24 hours.
-
-## Agent Guidance
-
-- First ask the user which machine should run the generated session script.
-- Do not invent session IDs; use the code printed by the agent or the `X-Session-Id` header.
-- Prefer raw text `/send` bodies for simple commands.
-- Use JSON `/send` only for `cwd` or timeout control.
-- Use `/probe` before guessing OS, hardware, or transport support.
-- Use `/config` to request `native`, `direct`, or `webrtc`; do not manually pause or replace agents.
-- Use `soe-webrtc send` for WebRTC DataChannel commands after `/config webrtc` succeeds; use `/send` as fallback.
-- Keep commands explicit and reversible.
-- End sessions with `/end` when finished.
-- Do not depend on undocumented response JSON.
-
-## Source
-
-- Repository: `https://github.com/Stoffberg/shell-over-edge`
-- README: `https://github.com/Stoffberg/shell-over-edge/blob/main/README.md`
-- Agent skill: `https://raw.githubusercontent.com/Stoffberg/shell-over-edge/main/skills/shell-over-edge/SKILL.md`
+- Command body: 64 KB.
+- Result body: 1 MB.
+- Timeout: 1-50 seconds.

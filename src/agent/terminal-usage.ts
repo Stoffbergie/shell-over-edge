@@ -10,16 +10,6 @@ irm ${baseUrl}/a.ps1 | iex
 Send a command:
 curl -sS -X POST ${baseUrl}/api/sessions/<code>/send --data 'pwd'
 
-Probe the machine:
-curl -sS ${baseUrl}/api/sessions/<code>/probe
-
-Upgrade transport:
-curl -sS -X POST ${baseUrl}/api/sessions/<code>/config --data 'native'
-curl -sS -X POST ${baseUrl}/api/sessions/<code>/config --data 'webrtc'
-
-Send over WebRTC:
-soe-webrtc send --base-url ${baseUrl} --session <code> --body 'pwd'
-
 Send a command with options:
 curl -sS -X POST ${baseUrl}/api/sessions/<code>/send \\
   --data '{"body":"pwd"}'
