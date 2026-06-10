@@ -6,7 +6,6 @@ export function shellAgentScript(baseUrl: string, meta: SessionMeta): string {
 set -u
 BASE_URL=${quoteShell(baseUrl)}
 SESSION_ID=${quoteShell(meta.code)}
-EXPIRES=${quoteShell(new Date(meta.expiresAt).toISOString())}
 
 copy_text() {
   if command -v pbcopy >/dev/null 2>&1; then
@@ -76,7 +75,7 @@ else
   CLIPBOARD='clipboard copy unavailable'
 fi
 
-printf '\\nShell Over Edge\\n\\nSession: %s (%s)\\nExpires: %s\\n\\nSend command:\\ncurl -sS -X POST %s/api/sessions/%s/send --data '"'"'pwd'"'"'\\n\\nStop anytime: Ctrl+C\\n\\n' "$SESSION_ID" "$CLIPBOARD" "$EXPIRES" "$BASE_URL" "$SESSION_ID"
+printf 'Session: %s (%s)\\nStop anytime: Ctrl+C\\n' "$SESSION_ID" "$CLIPBOARD"
 trap 'post_bye; exit 0' INT TERM EXIT
 curl -fsS --connect-timeout 5 --max-time 15 -X POST -H "X-Agent-Platform: $(uname -s)" -H "X-Agent-User: $(whoami)" --data-binary "$(pwd)" "$BASE_URL/api/sessions/$SESSION_ID/hello" >/dev/null
 
@@ -89,8 +88,6 @@ while true; do
     continue
   fi
   if [ "$status_code" = "410" ] || [ "$status_code" = "404" ] || [ "$status_code" = "401" ]; then
-    cat "$body_file"
-    printf '\\n'
     rm -f "$headers_file" "$body_file"
     exit 0
   fi

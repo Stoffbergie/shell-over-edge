@@ -24,7 +24,9 @@ test("session creation returns plain scripts keyed by a short code capability", 
   assert.ok(shell.script.startsWith("#!/bin/sh"));
   assert.ok(shell.script.includes(`SESSION_ID='${shell.id}'`));
   assert.ok(shell.script.includes(`/api/sessions/$SESSION_ID/next`));
-  assert.ok(shell.script.includes("/api/sessions/%s/send"));
+  assert.ok(shell.script.includes("Session: %s (%s)\\nStop anytime: Ctrl+C\\n"));
+  assert.ok(!shell.script.includes("Send command:"));
+  assert.ok(!shell.script.includes("Expires:"));
   assert.ok(shell.script.includes("copy_text()"));
   assert.ok(!shell.script.includes("Authorization: Bearer"));
   assert.ok(!shell.script.includes("?token" + "="));
@@ -34,6 +36,10 @@ test("session creation returns plain scripts keyed by a short code capability", 
   assert.match(powerShell.id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
   assert.ok(powerShell.script.includes(`$SessionId = "${powerShell.id}"`));
   assert.ok(powerShell.script.includes("/api/sessions/$SessionId/next"));
+  assert.ok(powerShell.script.includes('Write-Host "Session: $SessionId ($Clipboard)"'));
+  assert.ok(powerShell.script.includes('Write-Host "Stop anytime: Ctrl+C"'));
+  assert.ok(!powerShell.script.includes('Write-Host "Send command:"'));
+  assert.ok(!powerShell.script.includes('Write-Host "Expires:'));
   assert.ok(powerShell.script.includes("Set-Clipboard"));
   assert.ok(!powerShell.script.includes("Authorization"));
   assert.ok(!powerShell.script.includes("?token" + "="));

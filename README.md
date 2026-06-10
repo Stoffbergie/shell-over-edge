@@ -253,7 +253,7 @@ Reference run from this machine to `https://soe.stoff.dev` on June 10, 2026:
 | `POST /api/sessions` | 1031.5 ms | 1120.2 ms |
 | relay command round trip | 974.8 ms | 1102.2 ms |
 
-The same run processed 32 queued relay commands in 7888.8 ms from a single agent loop. Current response sizes are 362 bytes for `/`, 2707 bytes for `/a`, 2873 bytes for `/a.ps1`, and 3668 bytes for a generated POSIX relay agent.
+The same run processed 32 queued relay commands in 7888.8 ms from a single agent loop. Current response sizes are 362 bytes for `/`, 2707 bytes for `/a`, 2873 bytes for `/a.ps1`, and 3441 bytes for a generated POSIX relay agent.
 
 ## Cloudflare
 
