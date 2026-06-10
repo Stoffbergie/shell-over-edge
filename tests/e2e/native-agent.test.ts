@@ -37,6 +37,7 @@ test.skipIf(skipNative)("native agent connects and streams a command through the
 
     await endSession(server.baseUrl, session.id);
     await waitForExit(agent, 10_000, output);
+    assertQuietAgentOutput(output());
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
     await rm(dir, { force: true, recursive: true });
@@ -77,6 +78,7 @@ test.skipIf(skipNative)("native agent answers probe and config control commands"
 
     await endSession(server.baseUrl, session.id);
     await waitForExit(agent, 10_000, output);
+    assertQuietAgentOutput(output());
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
     await rm(dir, { force: true, recursive: true });
@@ -236,6 +238,10 @@ function diagnostics(output: () => string, server: TestServer): () => string {
     "recent requests:",
     JSON.stringify(server.requests.slice(-50))
   ].join("\n");
+}
+
+function assertQuietAgentOutput(output: string): void {
+  assert.equal(output, "");
 }
 
 function noProxyEnv(): NodeJS.ProcessEnv {
