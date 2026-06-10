@@ -8,7 +8,6 @@ type BridgeFetch = (id: string, request: RequestInfo | URL, init?: RequestInit) 
 type TestEnvOptions = {
   baseUrl?: string;
   bridgeFetch?: BridgeFetch;
-  legacyBridge?: boolean;
 };
 
 export type TestFixture = {
@@ -42,8 +41,7 @@ export function createTestEnv(options: TestEnvOptions = {}): TestFixture {
     env: {
       SOE_MAILBOX: mailbox as unknown as R2Bucket,
       COMMAND_BRIDGES: namespace as unknown as DurableObjectNamespace,
-      BASE_URL: options.baseUrl || "https://soe.test",
-      ENABLE_LEGACY_BRIDGE: options.legacyBridge ? "true" : undefined
+      BASE_URL: options.baseUrl || "https://soe.test"
     },
     mailbox,
     namespace,

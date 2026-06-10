@@ -4,10 +4,6 @@ Ordered by impact on a five-minute senior-engineer review.
 
 ## Open
 
-- [ ] P2: Delete dead support code and template leftovers.
-  - Problem: `ENABLE_LEGACY_BRIDGE` and `legacyBridge` are unused, `jsonResponse` only exists for its own unit test, and `pnpm-workspace.yaml` advertises nonexistent workspace package globs.
-  - Proof required: `pnpm run validate`.
-
 - [ ] P2: Test the real Durable Object command bridge directly.
   - Problem: integration/load tests exercise a duplicated fake bridge, so the production `CommandBridge` queue/result behavior can drift without a direct test failing.
   - Proof required: direct bridge tests for queued sends, result matching, end behavior, and timeout edge cases; `pnpm run test`.
@@ -29,3 +25,7 @@ Ordered by impact on a five-minute senior-engineer review.
 - [x] P1: Make the README pass a cold-clone skim.
   - Fixed: added a concrete terminal demo, runtime requirements, fresh-clone setup, separate local-development instructions, tech-decision rationale, and removed the internal tool label. `repo-audit` now guards the required README sections.
   - Proof: `corepack enable`; `pnpm install --frozen-lockfile`; `pnpm run repo:audit`; `pnpm run validate`; `pnpm run build`; local `pnpm run dev` plus `curl -sS http://127.0.0.1:8787/`.
+
+- [x] P2: Delete dead support code and template leftovers.
+  - Fixed: removed the unused legacy bridge env/test option, deleted the unused JSON response helper and self-test, and reduced the pnpm workspace globs to the actual package.
+  - Proof: no `rg` hits for the removed terms; `pnpm run validate`; `pnpm run build`; local `pnpm run dev` plus root curl.
