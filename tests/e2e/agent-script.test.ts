@@ -37,6 +37,7 @@ test.skipIf(!sh || !curl)("generated POSIX agent script connects, runs a command
 
     await endSession(server.baseUrl, session.id);
     await waitForExit(agent, 10_000, output);
+    assertCompactAgentOutput(output(), session.id);
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
     await removeDir(dir);
@@ -72,6 +73,7 @@ test.skipIf(!sh || !curl)("POSIX bootstrap starts relay immediately when native 
 
     await endSession(server.baseUrl, id);
     await waitForExit(agent, 10_000, output);
+    assertCompactAgentOutput(output(), id);
   } finally {
     if (agent && agent.exitCode === null) agent.kill();
     await removeDir(dir);
@@ -411,6 +413,15 @@ function diagnostics(output: () => string, server: TestServer): () => string {
     "recent requests:",
     JSON.stringify(server.requests.slice(-50))
   ].join("\n");
+}
+
+function assertCompactAgentOutput(output: string, sessionId: string): void {
+  assert.match(output, new RegExp(`Session: ${sessionId} \\(`));
+  assert.match(output, /Stop anytime: Ctrl\+C/);
+  assert.ok(!output.includes("Shell Over Edge"));
+  assert.ok(!output.includes("Expires:"));
+  assert.ok(!output.includes("Send command:"));
+  assert.ok(!output.includes("Session ended"));
 }
 
 function sleep(ms: number): Promise<void> {

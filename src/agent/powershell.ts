@@ -5,7 +5,6 @@ export function powerShellAgentScript(baseUrl: string, meta: SessionMeta): strin
   return `$ErrorActionPreference = "Stop"
 $BaseUrl = ${quotePowerShell(baseUrl)}
 $SessionId = ${quotePowerShell(meta.code)}
-$Expires = ${quotePowerShell(new Date(meta.expiresAt).toISOString())}
 $PlatformName = if ($PSVersionTable.Platform) { [string]$PSVersionTable.Platform } else { [string][Environment]::OSVersion.Platform }
 $Headers = @{
   "X-Agent-Platform" = $PlatformName
@@ -149,17 +148,8 @@ function Run-Command([string]$CommandBody, [string]$Cwd, [string]$ResultFile, [i
   }
 }
 
-Write-Host ""
-Write-Host "Shell Over Edge"
-Write-Host ""
 Write-Host "Session: $SessionId ($Clipboard)"
-Write-Host "Expires: $Expires"
-Write-Host ""
-Write-Host "Send command:"
-Write-Host "curl.exe -sS -X POST $BaseUrl/api/sessions/$SessionId/send --data ""pwd"""
-Write-Host ""
 Write-Host "Stop anytime: Ctrl+C"
-Write-Host ""
 
 try { [Console]::TreatControlCAsInput = $false } catch {}
 try {
@@ -174,7 +164,6 @@ try {
       continue
     }
     if ($StatusCode -eq 410 -or $StatusCode -eq 401 -or $StatusCode -eq 404) {
-      if (Test-Path $BodyFile) { Get-Content $BodyFile -Raw | Write-Host }
       Remove-Item $BodyFile, $ResultFile -Force
       break
     }

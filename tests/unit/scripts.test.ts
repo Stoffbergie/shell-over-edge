@@ -24,6 +24,10 @@ const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershe
 test("generated shell agent is portable across common Unix environments", () => {
   const script = shellAgentScript("https://soe.test", meta);
   assert.match(script, /SESSION_ID='abc234de'/);
+  assert.match(script, /Session: %s \(%s\)\\nStop anytime: Ctrl\+C\\n/);
+  assert.ok(!script.includes("Shell Over Edge\\n"));
+  assert.ok(!script.includes("Expires:"));
+  assert.ok(!script.includes("Send command:"));
   assert.match(script, /pbcopy/);
   assert.match(script, /wl-copy/);
   assert.match(script, /xclip -selection clipboard/);
@@ -60,6 +64,11 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   const script = powerShellAgentScript("https://soe.test", meta);
 
   assert.match(script, /\$SessionId = "abc234de"/);
+  assert.match(script, /Write-Host "Session: \$SessionId \(\$Clipboard\)"/);
+  assert.match(script, /Write-Host "Stop anytime: Ctrl\+C"/);
+  assert.ok(!script.includes('Write-Host "Shell Over Edge"'));
+  assert.ok(!script.includes('Write-Host "Expires:'));
+  assert.ok(!script.includes('Write-Host "Send command:"'));
   assert.match(script, /Set-Clipboard/);
   assert.match(script, /System\.Net\.WebRequest/);
   assert.match(script, /\$Request\.Timeout = 35000/);
