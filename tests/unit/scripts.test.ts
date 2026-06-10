@@ -33,6 +33,9 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.match(script, /base64 -D/);
   assert.match(script, /command -v timeout/);
   assert.match(script, /SOE_NO_END_ON_EXIT/);
+  assert.match(script, /--connect-timeout 5 --max-time 15/);
+  assert.match(script, /--connect-timeout 5 --max-time 35/);
+  assert.match(script, /--connect-timeout 5 --max-time 30/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/hello/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/next/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/result\/\$command_id\?exit=\$exit_code/);
@@ -59,6 +62,8 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   assert.match(script, /\$SessionId = "abc234de"/);
   assert.match(script, /Set-Clipboard/);
   assert.match(script, /System\.Net\.WebRequest/);
+  assert.match(script, /\$Request\.Timeout = 35000/);
+  assert.match(script, /\$Request\.ReadWriteTimeout = 35000/);
   assert.match(script, /Get-ResponseHeader/);
   assert.match(script, /InnerException\.Response/);
   assert.match(script, /Start-ThreadJob/);
@@ -93,6 +98,7 @@ test.skipIf(unixShells.length === 0)("generated POSIX bootstrap is syntax-valid 
   assert.match(script, /SOE_AUTO_UPGRADE/);
   assert.match(script, /SOE_WARM_NATIVE/);
   assert.ok(script.includes('if [ "${SOE_AUTO_UPGRADE:-}" = "1" ] || [ "${SOE_WARM_NATIVE:-}" = "1" ] || [ -n "${SOE_NATIVE_URL:-}" ]; then'));
+  assert.match(script, /--connect-timeout 5 --max-time 20/);
   assert.match(script, /SOE_NO_END_ON_EXIT=1 sh "\$AGENT_FILE"/);
   assert.match(script, /exec "\$NATIVE_FILE" --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
   for (const shell of unixShells) await assertShellSyntax(shell, script);
@@ -104,6 +110,7 @@ test.skipIf(!powerShell)("generated PowerShell bootstrap parses", async () => {
   assert.match(script, /SOE_AUTO_UPGRADE/);
   assert.match(script, /SOE_WARM_NATIVE/);
   assert.ok(script.includes('if ($env:SOE_AUTO_UPGRADE -eq "1" -or $env:SOE_WARM_NATIVE -eq "1" -or $env:SOE_NATIVE_URL)'));
+  assert.match(script, /-TimeoutSec 20/);
   assert.match(script, /\$env:SOE_NO_END_ON_EXIT = "1"/);
   assert.match(script, /--base-url \$BaseUrl --session \$SessionId/);
   await assertPowerShellParses(powerShell, script);

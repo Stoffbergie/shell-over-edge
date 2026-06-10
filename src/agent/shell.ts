@@ -40,7 +40,7 @@ post_bye() {
   if [ "\${SOE_NO_END_ON_EXIT:-}" = "1" ]; then
     return 0
   fi
-  curl -fsS -X POST "$BASE_URL/api/sessions/$SESSION_ID/end" >/dev/null 2>&1 || true
+  curl -fsS --connect-timeout 5 --max-time 10 -X POST "$BASE_URL/api/sessions/$SESSION_ID/end" >/dev/null 2>&1 || true
 }
 
 run_shell() {
@@ -78,12 +78,12 @@ fi
 
 printf '\\nShell Over Edge\\n\\nSession: %s (%s)\\nExpires: %s\\n\\nSend command:\\ncurl -sS -X POST %s/api/sessions/%s/send --data '"'"'pwd'"'"'\\n\\nStop anytime: Ctrl+C\\n\\n' "$SESSION_ID" "$CLIPBOARD" "$EXPIRES" "$BASE_URL" "$SESSION_ID"
 trap 'post_bye; exit 0' INT TERM EXIT
-curl -fsS -X POST -H "X-Agent-Platform: $(uname -s)" -H "X-Agent-User: $(whoami)" --data-binary "$(pwd)" "$BASE_URL/api/sessions/$SESSION_ID/hello" >/dev/null
+curl -fsS --connect-timeout 5 --max-time 15 -X POST -H "X-Agent-Platform: $(uname -s)" -H "X-Agent-User: $(whoami)" --data-binary "$(pwd)" "$BASE_URL/api/sessions/$SESSION_ID/hello" >/dev/null
 
 while true; do
   headers_file=$(mktemp)
   body_file=$(mktemp)
-  status_code=$(curl -sS -D "$headers_file" -o "$body_file" -w "%{http_code}" "$BASE_URL/api/sessions/$SESSION_ID/next" || printf '000')
+  status_code=$(curl -sS --connect-timeout 5 --max-time 35 -D "$headers_file" -o "$body_file" -w "%{http_code}" "$BASE_URL/api/sessions/$SESSION_ID/next" || printf '000')
   if [ "$status_code" = "204" ]; then
     rm -f "$headers_file" "$body_file"
     continue
@@ -109,7 +109,7 @@ while true; do
   command_body=$(cat "$body_file")
   (run_shell "$command_body" "$cwd" "$timeout_seconds" "$result_file")
   exit_code=$?
-  curl -fsS -X POST --data-binary "@$result_file" "$BASE_URL/api/sessions/$SESSION_ID/result/$command_id?exit=$exit_code" >/dev/null || true
+  curl -fsS --connect-timeout 5 --max-time 30 -X POST --data-binary "@$result_file" "$BASE_URL/api/sessions/$SESSION_ID/result/$command_id?exit=$exit_code" >/dev/null || true
   rm -f "$headers_file" "$body_file" "$result_file"
 done
 `;
