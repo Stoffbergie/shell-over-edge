@@ -89,6 +89,7 @@ const root = await request("/");
 assert(root.response.ok, `GET / returned ${root.response.status}`);
 assert(root.text.includes("Shell Over Edge"), "GET / did not return Shell Over Edge usage");
 assert(root.text.includes("/api/sessions/<code>/send"), "GET / did not return send usage");
+assert(root.text.includes("/api/sessions/<code>/end"), "GET / did not return end usage");
 assert(root.text.includes(`${baseUrl}/a | sh`), "GET / did not return bootstrap usage");
 assert(!root.text.includes("/probe"), "GET / should not document probe");
 assert(!root.text.includes("/config"), "GET / should not document config");

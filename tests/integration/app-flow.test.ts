@@ -11,6 +11,12 @@ test("session creation returns relay-only scripts keyed by a short code capabili
   const info = vi.spyOn(console, "info").mockImplementation((line) => {
     infoLines.push(String(line));
   });
+  const root = await app.request("/", {}, fixture.env, fixture.ctx);
+  assert.equal(root.status, 200);
+  const rootText = await text(root);
+  assert.ok(rootText.includes("/api/sessions/<code>/send"));
+  assert.ok(rootText.includes("/api/sessions/<code>/end"));
+
   const bootstrap = await app.request("/a", {}, fixture.env, fixture.ctx);
   assert.equal(bootstrap.status, 200);
   assert.equal(bootstrap.headers.get("Content-Type"), "text/x-shellscript; charset=utf-8");
