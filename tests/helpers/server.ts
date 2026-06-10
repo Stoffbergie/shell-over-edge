@@ -37,7 +37,9 @@ export async function startAppServer(app: Hono<{ Bindings: Env }>, fixture: Test
       requests.push({ at: Date.now(), method: incoming.method || "GET", path: incoming.url || "/", status: response.status });
       outgoing.statusCode = response.status;
       outgoing.statusMessage = response.statusText;
-      response.headers.forEach((value, key) => outgoing.setHeader(key, value));
+      response.headers.forEach((value, key) => {
+        outgoing.setHeader(key, value);
+      });
       const bytes = Buffer.from(await response.arrayBuffer());
       outgoing.end(bytes);
     } catch (error) {
