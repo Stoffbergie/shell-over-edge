@@ -1,5 +1,5 @@
 import type { SessionMeta } from "../domain/session";
-import { agentProtocolVersion, nativeReleaseBaseUrl } from "../shared/config";
+import { agentProtocolVersion, nativeReleaseBaseUrl, releaseAssetDownloadTimeoutSeconds } from "../shared/config";
 import { quotePowerShell } from "../shared/strings";
 
 export function powerShellAgentScript(baseUrl: string, meta: SessionMeta): string {
@@ -199,7 +199,7 @@ function Start-NativeDownload {
   if (!$Name -and !$env:SOE_NATIVE_URL) { return $false }
   $Url = if ($env:SOE_NATIVE_URL) { $env:SOE_NATIVE_URL } else { "$NativeBaseUrl/$Name" }
   try {
-    Invoke-WebRequest -Uri $Url -OutFile "$NativePath.tmp" -UseBasicParsing -TimeoutSec 40
+    Invoke-WebRequest -Uri $Url -OutFile "$NativePath.tmp" -UseBasicParsing -TimeoutSec ${releaseAssetDownloadTimeoutSeconds}
     Move-Item "$NativePath.tmp" $NativePath -Force
     if (![Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)) {
       & chmod +x $NativePath 2>$null
@@ -216,7 +216,7 @@ function Start-WebRtcDriver {
   $Url = if ($env:SOE_WEBRTC_URL) { $env:SOE_WEBRTC_URL } else { "$WebRtcBaseUrl/$Name" }
   try {
     if (!(Test-Path -LiteralPath $WebRtcPath -PathType Leaf)) {
-      Invoke-WebRequest -Uri $Url -OutFile "$WebRtcPath.tmp" -UseBasicParsing -TimeoutSec 40
+      Invoke-WebRequest -Uri $Url -OutFile "$WebRtcPath.tmp" -UseBasicParsing -TimeoutSec ${releaseAssetDownloadTimeoutSeconds}
       Move-Item "$WebRtcPath.tmp" $WebRtcPath -Force
       if (![Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)) {
         & chmod +x $WebRtcPath 2>$null

@@ -24,7 +24,7 @@ const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershe
 test("generated shell agent is portable across common Unix environments", () => {
   const script = shellAgentScript("https://soe.test", meta);
   assert.match(script, /SESSION_ID='abc234de'/);
-  assert.match(script, /AGENT_VERSION='0\.2\.0'/);
+  assert.match(script, /AGENT_VERSION='0\.2\.1'/);
   assert.match(script, /NATIVE_BASE_URL=/);
   assert.match(script, /Session: %s \(%s\)\\nStop anytime: Ctrl\+C\\n/);
   assert.ok(!script.includes("Shell Over Edge\\n"));
@@ -53,6 +53,8 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.match(script, /--connect-timeout 5 --max-time 15/);
   assert.match(script, /--connect-timeout 5 --max-time 35/);
   assert.match(script, /--connect-timeout 5 --max-time 30/);
+  assert.match(script, /--connect-timeout 5 --max-time 300 -o "\$NATIVE_FILE\.tmp"/);
+  assert.match(script, /--connect-timeout 5 --max-time 300 -o "\$WEBRTC_FILE\.tmp"/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/hello/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/next/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/result\/\$command_id\?exit=\$exit_code/);
@@ -76,7 +78,7 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   const script = powerShellAgentScript("https://soe.test", meta);
 
   assert.match(script, /\$SessionId = "abc234de"/);
-  assert.match(script, /\$AgentVersion = "0\.2\.0"/);
+  assert.match(script, /\$AgentVersion = "0\.2\.1"/);
   assert.match(script, /\$NativeBaseUrl =/);
   assert.match(script, /Write-Host "Session: \$SessionId \(\$Clipboard\)"/);
   assert.match(script, /Write-Host "Stop anytime: Ctrl\+C"/);
@@ -87,6 +89,8 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   assert.match(script, /System\.Net\.WebRequest/);
   assert.match(script, /\$Request\.Timeout = 35000/);
   assert.match(script, /\$Request\.ReadWriteTimeout = 35000/);
+  assert.match(script, /Invoke-WebRequest -Uri \$Url -OutFile "\$NativePath\.tmp" -UseBasicParsing -TimeoutSec 300/);
+  assert.match(script, /Invoke-WebRequest -Uri \$Url -OutFile "\$WebRtcPath\.tmp" -UseBasicParsing -TimeoutSec 300/);
   assert.match(script, /Get-ResponseHeader/);
   assert.match(script, /InnerException\.Response/);
   assert.match(script, /Start-ThreadJob/);
