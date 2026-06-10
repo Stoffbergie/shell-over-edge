@@ -39,11 +39,8 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile --prefer-offline
 
-      - name: Check
-        run: pnpm run typecheck && pnpm run typecheck:test && pnpm run repo:audit
-
-      - name: Validate Worker bundle
-        run: pnpm run dry-run
+      - name: Validate
+        run: pnpm run validate
 
       - name: Ensure checks did not modify files
         run: git diff --exit-code
