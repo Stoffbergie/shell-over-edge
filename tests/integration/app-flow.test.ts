@@ -281,6 +281,74 @@ test("sessions return default ICE config without TURN secrets", async () => {
   assert.deepEqual(payload.iceServers, [{ urls: ["stun:stun.cloudflare.com:3478"] }]);
 });
 
+test("probe and config use typed agent control commands", async () => {
+  const fixture = createTestEnv();
+  const session = await createSession(app, fixture);
+
+  const probe = app.request(`/api/sessions/${session.id}/probe`, {}, fixture.env, fixture.ctx);
+  const probeCommand = await waitForNext(session.id, fixture);
+  assert.equal(probeCommand.headers.get("X-Command-Type"), "probe");
+  assert.equal(probeCommand.headers.get("X-Command-Timeout"), "15");
+  assert.equal(await text(probeCommand), "");
+
+  const probeResult = await app.request(`/api/sessions/${session.id}/result/${probeCommand.headers.get("X-Command-Id")}?exit=0`, {
+    method: "POST",
+    body: '{"session":"abc234de","supports":{"relay":true,"native":true,"webrtcSignaling":true}}'
+  }, fixture.env, fixture.ctx);
+  assert.equal(probeResult.status, 200);
+
+  const probeResponse = await probe;
+  assert.equal(probeResponse.status, 200);
+  assert.match(probeResponse.headers.get("Content-Type") || "", /^application\/json/);
+  assert.equal(probeResponse.headers.get("X-Command-Type"), "probe");
+  const probePayload = await probeResponse.json() as { supports: { native: boolean } };
+  assert.equal(probePayload.supports.native, true);
+
+  const config = app.request(`/api/sessions/${session.id}/config`, {
+    method: "POST",
+    body: "webrtc"
+  }, fixture.env, fixture.ctx);
+  const configCommand = await waitForNext(session.id, fixture);
+  assert.equal(configCommand.headers.get("X-Command-Type"), "config");
+  assert.equal(configCommand.headers.get("X-Command-Timeout"), "60");
+  assert.equal(await text(configCommand), "webrtc");
+
+  const configResult = await app.request(`/api/sessions/${session.id}/result/${configCommand.headers.get("X-Command-Id")}?exit=0`, {
+    method: "POST",
+    body: '{"ok":true,"requested":"webrtc","active":"native","fallback":true}'
+  }, fixture.env, fixture.ctx);
+  assert.equal(configResult.status, 200);
+
+  const configResponse = await config;
+  assert.equal(configResponse.status, 200);
+  assert.match(configResponse.headers.get("Content-Type") || "", /^application\/json/);
+  assert.equal(configResponse.headers.get("X-Command-Type"), "config");
+  const configPayload = await configResponse.json() as { requested: string; active: string; fallback: boolean };
+  assert.equal(configPayload.requested, "webrtc");
+  assert.equal(configPayload.active, "native");
+  assert.equal(configPayload.fallback, true);
+
+  const jsonConfig = app.request(`/api/sessions/${session.id}/config`, {
+    method: "POST",
+    body: '{"transport":"native"}'
+  }, fixture.env, fixture.ctx);
+  const jsonCommand = await waitForNext(session.id, fixture);
+  assert.equal(jsonCommand.headers.get("X-Command-Type"), "config");
+  assert.equal(await text(jsonCommand), "native");
+  assert.equal((await app.request(`/api/sessions/${session.id}/result/${jsonCommand.headers.get("X-Command-Id")}?exit=0`, {
+    method: "POST",
+    body: '{"ok":true,"requested":"native","active":"native"}'
+  }, fixture.env, fixture.ctx)).status, 200);
+  assert.equal((await jsonConfig).status, 200);
+
+  const invalidConfig = await app.request(`/api/sessions/${session.id}/config`, {
+    method: "POST",
+    body: "ftp"
+  }, fixture.env, fixture.ctx);
+  assert.equal(invalidConfig.status, 400);
+  assert.equal(await text(invalidConfig), "Unsupported transport config: ftp\n");
+});
+
 test("invalid sessions, bad send payloads, and retired routes return text errors", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);

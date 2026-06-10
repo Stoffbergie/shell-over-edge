@@ -24,6 +24,8 @@ const powerShell = findCommand(process.platform === "win32" ? ["pwsh", "powershe
 test("generated shell agent is portable across common Unix environments", () => {
   const script = shellAgentScript("https://soe.test", meta);
   assert.match(script, /SESSION_ID='abc234de'/);
+  assert.match(script, /AGENT_VERSION='0\.2\.0'/);
+  assert.match(script, /NATIVE_BASE_URL=/);
   assert.match(script, /Session: %s \(%s\)\\nStop anytime: Ctrl\+C\\n/);
   assert.ok(!script.includes("Shell Over Edge\\n"));
   assert.ok(!script.includes("Expires:"));
@@ -37,6 +39,11 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.match(script, /base64 -D/);
   assert.match(script, /command -v timeout/);
   assert.match(script, /SOE_NO_END_ON_EXIT/);
+  assert.match(script, /probe_json\(\)/);
+  assert.match(script, /config_json\(\)/);
+  assert.match(script, /download_native\(\)/);
+  assert.match(script, /X-Command-Type/);
+  assert.match(script, /exec "\$NATIVE_FILE" --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
   assert.match(script, /--connect-timeout 5 --max-time 15/);
   assert.match(script, /--connect-timeout 5 --max-time 35/);
   assert.match(script, /--connect-timeout 5 --max-time 30/);
@@ -64,6 +71,8 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   const script = powerShellAgentScript("https://soe.test", meta);
 
   assert.match(script, /\$SessionId = "abc234de"/);
+  assert.match(script, /\$AgentVersion = "0\.2\.0"/);
+  assert.match(script, /\$NativeBaseUrl =/);
   assert.match(script, /Write-Host "Session: \$SessionId \(\$Clipboard\)"/);
   assert.match(script, /Write-Host "Stop anytime: Ctrl\+C"/);
   assert.ok(!script.includes('Write-Host "Shell Over Edge"'));
@@ -78,7 +87,11 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   assert.match(script, /Start-ThreadJob/);
   assert.match(script, /Start-Job/);
   assert.match(script, /X-Command-Timeout/);
+  assert.match(script, /X-Command-Type/);
   assert.match(script, /SOE_NO_END_ON_EXIT/);
+  assert.match(script, /Get-ProbeJson/);
+  assert.match(script, /Get-ConfigJson/);
+  assert.match(script, /Start-NativeDownload/);
   assert.match(script, /Command timed out after \$TimeoutSeconds seconds/);
   assert.match(script, /\$StatusCode -eq 204/);
   assert.ok(!script.includes("Start-Sleep -Seconds 2"));

@@ -9,11 +9,13 @@ import type { Env } from "../env";
 
 type BridgeCommand = {
   id: string;
-  type: "shell";
+  type: CommandType;
   body: string;
   cwd: string;
   timeoutSeconds: number;
 };
+
+type CommandType = "shell" | "probe" | "config";
 
 type CommandPayload = {
   body?: unknown;
@@ -23,6 +25,7 @@ type CommandPayload = {
 
 type ResponseWaiter = {
   commandId?: string;
+  type?: CommandType;
   resolve: (response: Response) => void;
   queueTimer?: ReturnType<typeof setTimeout>;
   resultTimer?: ReturnType<typeof setTimeout>;
@@ -47,6 +50,8 @@ export class CommandBridge extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/send") return this.sendCommand(request);
+    if (url.pathname === "/probe") return this.sendControlCommand("probe", "", 15);
+    if (url.pathname === "/config") return this.sendControlCommand("config", await request.text(), 60);
     if (url.pathname === "/next") return this.nextCommand(request);
     if (url.pathname.startsWith("/result/")) return this.receiveResult(request, cleanString(url.pathname.slice("/result/".length), 200));
     if (url.pathname === "/signals" && request.method === "POST") return this.publishSignal(request);
@@ -68,19 +73,34 @@ export class CommandBridge extends DurableObject<Env> {
       timeoutSeconds: normalizeTimeout(payload.timeoutSeconds ?? 30)
     };
 
+    return this.enqueueCommand(command);
+  }
+
+  private sendControlCommand(type: "probe" | "config", body: string, timeoutSeconds: number): Promise<Response> {
+    const command: BridgeCommand = {
+      id: randomId(),
+      type,
+      body,
+      cwd: "",
+      timeoutSeconds
+    };
+    return this.enqueueCommand(command);
+  }
+
+  private enqueueCommand(command: BridgeCommand): Promise<Response> {
     const response = new Promise<Response>((resolve) => {
       const queueTimer = setTimeout(() => {
         this.resultWaiters.delete(command.id);
         this.removeQueued(command.id);
         this.rememberCommand(command.id);
-        logInfo("command_timeout", { commandId: command.id, waitMs: maxSendWaitMs, phase: "queue" });
+        logInfo("command_timeout", { commandId: command.id, commandType: command.type, waitMs: maxSendWaitMs, phase: "queue" });
         resolve(textResponse("Timed out waiting for command result\n", 504));
       }, maxSendWaitMs);
-      this.resultWaiters.set(command.id, { commandId: command.id, resolve, queueTimer });
+      this.resultWaiters.set(command.id, { commandId: command.id, type: command.type, resolve, queueTimer });
     });
 
     this.dispatch(command);
-    logInfo("command_sent", { commandId: command.id, bytes: command.body.length, timeoutSeconds: command.timeoutSeconds });
+    logInfo("command_sent", { commandId: command.id, commandType: command.type, bytes: command.body.length, timeoutSeconds: command.timeoutSeconds });
     return response;
   }
 
@@ -124,8 +144,9 @@ export class CommandBridge extends DurableObject<Env> {
       status: exitCode === 0 ? 200 : 500,
       headers: {
         "Cache-Control": "no-store",
-        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Type": waiter.type === "probe" || waiter.type === "config" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8",
         "X-Command-Id": commandId,
+        "X-Command-Type": waiter.type || "shell",
         "X-Exit-Code": String(exitCode)
       }
     }));

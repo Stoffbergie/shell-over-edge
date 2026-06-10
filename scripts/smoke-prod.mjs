@@ -99,6 +99,8 @@ const root = await request("/");
 assert(root.response.ok, `GET / returned ${root.response.status}`);
 assert(root.text.includes("Shell Over Edge"), "GET / did not return Shell Over Edge usage");
 assert(root.text.includes("/api/sessions/<code>/send"), "GET / did not return simplified send usage");
+assert(root.text.includes("/api/sessions/<code>/probe"), "GET / did not return probe usage");
+assert(root.text.includes("/api/sessions/<code>/config"), "GET / did not return config usage");
 assert(root.text.includes(`${baseUrl}/a | sh`), "GET / did not return bootstrap usage");
 
 const legacy = await request("/connect.sh");
@@ -125,6 +127,9 @@ const id = session.response.headers["x-session-id"];
 assert(isSessionCode(id), "session code header missing");
 assert(session.text.startsWith("#!/bin/sh"), "session response is not a shell script");
 assert(session.text.includes(`/api/sessions/$SESSION_ID/next`), "shell script does not poll the simplified session route");
+assert(session.text.includes("probe_json"), "shell script does not support probe control commands");
+assert(session.text.includes("config_json"), "shell script does not support config control commands");
+assert(session.text.includes("X-Command-Type"), "shell script does not read command type");
 assert(!session.text.includes("Authorization"), "shell script should not use authorization headers");
 assert(!session.text.includes("?token" + "="), "shell script leaks token in URL");
 
@@ -136,6 +141,9 @@ const powerShellId = powerShell.response.headers["x-session-id"];
 assert(isSessionCode(powerShellId), "PowerShell session code header missing");
 assert(powerShell.text.includes(`$SessionId = "${powerShellId}"`), "PowerShell script does not embed its session id");
 assert(powerShell.text.includes("/api/sessions/$SessionId/next"), "PowerShell script does not poll the simplified session route");
+assert(powerShell.text.includes("Get-ProbeJson"), "PowerShell script does not support probe control commands");
+assert(powerShell.text.includes("Get-ConfigJson"), "PowerShell script does not support config control commands");
+assert(powerShell.text.includes("X-Command-Type"), "PowerShell script does not read command type");
 assert(!powerShell.text.includes("Authorization"), "PowerShell script should not use authorization headers");
 
 const powerShellEnd = await request(`/api/sessions/${powerShellId}/end`, {
@@ -152,6 +160,47 @@ const hello = await request(`/api/sessions/${id}/hello`, {
   body: process.cwd()
 });
 assert(hello.response.ok, `agent hello returned ${hello.response.status}: ${hello.text}`);
+
+const probe = request(`/api/sessions/${id}/probe`);
+const probeNext = await request(`/api/sessions/${id}/next`);
+assert(probeNext.response.ok, `probe next returned ${probeNext.response.status}: ${probeNext.text}`);
+const probeCommandId = probeNext.response.headers["x-command-id"];
+assert(probeCommandId, "probe next did not return a command id");
+assert(probeNext.response.headers["x-command-type"] === "probe", "probe next did not use probe command type");
+assert(probeNext.text === "", "probe next should not include a shell body");
+
+const probeResult = await request(`/api/sessions/${id}/result/${probeCommandId}?exit=0`, {
+  method: "POST",
+  body: '{"session":"smoke","supports":{"relay":true,"native":true,"webrtcSignaling":true},"activeTransport":"relay"}'
+});
+assert(probeResult.response.ok, `probe result returned ${probeResult.response.status}: ${probeResult.text}`);
+
+const probeResponse = await probe;
+assert(probeResponse.response.ok, `probe returned ${probeResponse.response.status}: ${probeResponse.text}`);
+assert(probeResponse.response.headers["x-command-type"] === "probe", "probe response did not include command type");
+assert(JSON.parse(probeResponse.text).supports.relay === true, "probe response JSON is wrong");
+
+const config = request(`/api/sessions/${id}/config`, {
+  method: "POST",
+  body: "native"
+});
+const configNext = await request(`/api/sessions/${id}/next`);
+assert(configNext.response.ok, `config next returned ${configNext.response.status}: ${configNext.text}`);
+const configCommandId = configNext.response.headers["x-command-id"];
+assert(configCommandId, "config next did not return a command id");
+assert(configNext.response.headers["x-command-type"] === "config", "config next did not use config command type");
+assert(configNext.text === "native", "config next returned the wrong body");
+
+const configResult = await request(`/api/sessions/${id}/result/${configCommandId}?exit=0`, {
+  method: "POST",
+  body: '{"ok":true,"requested":"native","active":"native","upgraded":true,"fallback":false}'
+});
+assert(configResult.response.ok, `config result returned ${configResult.response.status}: ${configResult.text}`);
+
+const configResponse = await config;
+assert(configResponse.response.ok, `config returned ${configResponse.response.status}: ${configResponse.text}`);
+assert(configResponse.response.headers["x-command-type"] === "config", "config response did not include command type");
+assert(JSON.parse(configResponse.text).active === "native", "config response JSON is wrong");
 
 const ice = await requestUntil(`/api/sessions/${id}/ice`, {}, (result) => result.response.status !== 404);
 assert(ice.response.ok, `ICE config returned ${ice.response.status}: ${ice.text}`);

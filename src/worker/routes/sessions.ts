@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import { powerShellAgentScript } from "../../agent/powershell";
 import { shellAgentScript } from "../../agent/shell";
 import type { SessionMeta } from "../../domain/session";
-import { maxCommandBytes, maxDirectSignalBytes, sessionTtlMs } from "../../shared/config";
+import { maxCommandBytes, maxConfigBytes, maxDirectSignalBytes, sessionTtlMs } from "../../shared/config";
 import { randomSessionCode } from "../../shared/crypto";
 import { BadRequestError, cleanString, jsonResponse, normalizeTimeout, publicBaseUrl, readLimitedText, textResponse } from "../../shared/http";
 import { logInfo } from "../../shared/log";
@@ -31,6 +31,9 @@ export function registerSessionRoutes(app: SessionApp): void {
   app.post("/api/sessions", (c) => createSession(c, "shell"));
   app.post("/api/sessions.ps1", (c) => createSession(c, "powershell"));
   app.post("/api/sessions/:id/send", sendCommand);
+  app.get("/api/sessions/:id/probe", probeSession);
+  app.post("/api/sessions/:id/probe", probeSession);
+  app.post("/api/sessions/:id/config", configureSession);
   app.get("/api/sessions/:id/ice", iceServers);
   app.post("/api/sessions/:id/signals", publishSignal);
   app.get("/api/sessions/:id/signals", listSignals);
@@ -78,6 +81,25 @@ async function sendCommand(c: SessionContext): Promise<Response> {
   return sessionBridge(c.env, guard.meta.id).fetch("https://session/send", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+async function probeSession(c: SessionContext): Promise<Response> {
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
+
+  return sessionBridge(c.env, guard.meta.id).fetch("https://session/probe", {
+    method: "POST"
+  });
+}
+
+async function configureSession(c: SessionContext): Promise<Response> {
+  const guard = await requireSession(c.env, c.req.param("id"));
+  if ("response" in guard) return guard.response;
+
+  return sessionBridge(c.env, guard.meta.id).fetch("https://session/config", {
+    method: "POST",
+    body: await readConfigInput(c.req.raw)
   });
 }
 
@@ -201,4 +223,27 @@ async function readCommandInput(request: Request): Promise<{ body: string; cwd: 
     cwd: cleanString(payload.cwd, 500),
     timeoutSeconds: normalizeTimeout(payload.timeoutSeconds ?? payload.timeout ?? defaultTimeout)
   };
+}
+
+async function readConfigInput(request: Request): Promise<string> {
+  const raw = (await readLimitedText(request, maxConfigBytes)).trim();
+  if (!raw) return "auto";
+
+  let value = raw;
+  if (raw.startsWith("{")) {
+    type ConfigPayload = { transport?: unknown; mode?: unknown; target?: unknown };
+    let payload: ConfigPayload;
+    try {
+      payload = JSON.parse(raw) as ConfigPayload;
+    } catch {
+      throw new BadRequestError("Invalid JSON config payload");
+    }
+    value = cleanString(payload.transport ?? payload.mode ?? payload.target, 40);
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "http") return "direct";
+  if (normalized === "p2p") return "webrtc";
+  if (["auto", "relay", "native", "direct", "webrtc"].includes(normalized)) return normalized;
+  throw new BadRequestError(`Unsupported transport config: ${normalized || "empty"}`);
 }
