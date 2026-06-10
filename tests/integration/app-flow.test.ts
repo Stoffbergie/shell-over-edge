@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { strict as assert } from "node:assert";
 import { app } from "../../src/worker/app";
 import { createSession, createTestEnv, text, type TestFixture } from "../helpers/fake-env";
@@ -7,6 +7,10 @@ console.info = () => {};
 
 test("session creation returns relay-only scripts keyed by a short code capability", async () => {
   const fixture = createTestEnv();
+  const infoLines: string[] = [];
+  const info = vi.spyOn(console, "info").mockImplementation((line) => {
+    infoLines.push(String(line));
+  });
   const bootstrap = await app.request("/a", {}, fixture.env, fixture.ctx);
   assert.equal(bootstrap.status, 200);
   assert.equal(bootstrap.headers.get("Content-Type"), "text/x-shellscript; charset=utf-8");
@@ -36,6 +40,9 @@ test("session creation returns relay-only scripts keyed by a short code capabili
   assert.ok(!shell.script.includes("soe-agent"));
   assert.ok(!shell.script.includes("soe-webrtc"));
   assert.ok(!shell.script.includes("Authorization: Bearer"));
+  assert.ok(!shell.script.includes("X-Agent-User"));
+  assert.ok(!shell.script.includes("$(whoami)"));
+  assert.ok(!shell.script.includes("--data-binary \"$(pwd)\""));
   assert.ok(!shell.script.includes("?token" + "="));
 
   const powerShell = await createSession(app, fixture, "/api/sessions.ps1");
@@ -51,7 +58,16 @@ test("session creation returns relay-only scripts keyed by a short code capabili
   assert.ok(!powerShell.script.includes("soe-agent"));
   assert.ok(!powerShell.script.includes("soe-webrtc"));
   assert.ok(!powerShell.script.includes("Authorization"));
+  assert.ok(!powerShell.script.includes("X-Agent-User"));
+  assert.ok(!powerShell.script.includes("[Environment]::UserName"));
+  assert.ok(!powerShell.script.includes("(Get-Location).Path"));
   assert.ok(!powerShell.script.includes("?token" + "="));
+
+  info.mockRestore();
+  console.info = () => {};
+  const logs = infoLines.join("\n");
+  assert.ok(!logs.includes(shell.id));
+  assert.ok(!logs.includes(powerShell.id));
 });
 
 test("send waits for the agent result and returns plain command output", async () => {
@@ -61,10 +77,8 @@ test("send waits for the agent result and returns plain command output", async (
   const hello = await app.request(`/api/sessions/${session.id}/hello`, {
     method: "POST",
     headers: {
-      "X-Agent-Platform": "linux",
-      "X-Agent-User": "runner"
-    },
-    body: "/tmp"
+      "X-Agent-Platform": "linux"
+    }
   }, fixture.env, fixture.ctx);
   assert.equal(hello.status, 200);
   assert.equal(await text(hello), "connected\n");
@@ -191,6 +205,13 @@ test("late known command results are acknowledged after helper timeout", async (
 test("invalid sessions, bad send payloads, and removed routes return text errors", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);
+
+  const internalIdSend = await app.request(`/api/sessions/${session.internalId}/send`, {
+    method: "POST",
+    body: "pwd"
+  }, fixture.env, fixture.ctx);
+  assert.equal(internalIdSend.status, 404);
+  assert.equal(await text(internalIdSend), "Session not found\n");
 
   const invalidPayload = await app.request(`/api/sessions/${session.id}/send`, {
     method: "POST",

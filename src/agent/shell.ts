@@ -79,7 +79,7 @@ fi
 
 printf 'Session: %s (%s)\\nStop anytime: Ctrl+C\\n' "$SESSION_ID" "$CLIPBOARD"
 trap 'post_bye; exit 0' INT TERM EXIT
-curl -fsS --connect-timeout 5 --max-time 15 -X POST -H "X-Agent-Platform: $(uname -s)" -H "X-Agent-User: $(whoami)" --data-binary "$(pwd)" "$BASE_URL/api/sessions/$SESSION_ID/hello" >/dev/null
+curl -fsS --connect-timeout 5 --max-time 15 -X POST -H "X-Agent-Platform: $(uname -s)" "$BASE_URL/api/sessions/$SESSION_ID/hello" >/dev/null
 
 while true; do
   headers_file=$(mktemp)

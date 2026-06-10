@@ -53,6 +53,9 @@ test("generated shell agent is relay-only and portable", () => {
   assert.ok(!script.includes("config_json"));
   assert.ok(!script.includes("soe-agent"));
   assert.ok(!script.includes("soe-webrtc"));
+  assert.ok(!script.includes("X-Agent-User"));
+  assert.ok(!script.includes("$(whoami)"));
+  assert.ok(!script.includes("--data-binary \"$(pwd)\""));
   assert.ok(!script.includes("X-Command-Type"));
   assert.ok(!script.includes("Authorization"));
   assert.ok(!script.includes("/api/agent/"));
@@ -95,6 +98,9 @@ test("generated PowerShell agent is relay-only", () => {
   assert.ok(!script.includes("soe-webrtc"));
   assert.ok(!script.includes("Get-ProbeJson"));
   assert.ok(!script.includes("Get-ConfigJson"));
+  assert.ok(!script.includes("X-Agent-User"));
+  assert.ok(!script.includes("[Environment]::UserName"));
+  assert.ok(!script.includes("(Get-Location).Path"));
   assert.ok(!script.includes("X-Command-Type"));
   assert.ok(!script.includes("Authorization"));
   assert.ok(!script.includes("/api/agent/"));

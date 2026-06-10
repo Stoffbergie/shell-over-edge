@@ -115,6 +115,7 @@ assert(session.response.ok, `POST /api/sessions returned ${session.response.stat
 
 const id = session.response.headers["x-session-id"];
 assert(isSessionCode(id), "session code header missing");
+assert(!session.response.headers["x-session-internal-id"], "session response leaked internal id");
 assert(session.text.startsWith("#!/bin/sh"), "session response is not a shell script");
 assert(session.text.includes(`/api/sessions/$SESSION_ID/next`), "shell script does not poll the session route");
 assert(session.text.includes("AGENT_VERSION='0.3.0'"), "shell script has wrong agent version");
@@ -123,6 +124,9 @@ assert(!session.text.includes("download_webrtc"), "shell script still contains W
 assert(!session.text.includes("probe_json"), "shell script still contains probe control");
 assert(!session.text.includes("config_json"), "shell script still contains config control");
 assert(!session.text.includes("Authorization"), "shell script should not use authorization headers");
+assert(!session.text.includes("X-Agent-User"), "shell script should not send target user telemetry");
+assert(!session.text.includes("$(whoami)"), "shell script should not read target user");
+assert(!session.text.includes("--data-binary \"$(pwd)\""), "shell script should not send target cwd telemetry");
 assert(!session.text.includes("?token" + "="), "shell script leaks token in URL");
 
 const powerShell = await request("/api/sessions.ps1", {
@@ -131,6 +135,7 @@ const powerShell = await request("/api/sessions.ps1", {
 assert(powerShell.response.ok, `POST /api/sessions.ps1 returned ${powerShell.response.status}: ${powerShell.text}`);
 const powerShellId = powerShell.response.headers["x-session-id"];
 assert(isSessionCode(powerShellId), "PowerShell session code header missing");
+assert(!powerShell.response.headers["x-session-internal-id"], "PowerShell session response leaked internal id");
 assert(powerShell.text.includes(`$SessionId = "${powerShellId}"`), "PowerShell script does not embed its session id");
 assert(powerShell.text.includes("/api/sessions/$SessionId/next"), "PowerShell script does not poll the session route");
 assert(powerShell.text.includes("$AgentVersion = \"0.3.0\""), "PowerShell script has wrong agent version");
@@ -138,6 +143,9 @@ assert(!powerShell.text.includes("Get-ProbeJson"), "PowerShell script still cont
 assert(!powerShell.text.includes("Get-ConfigJson"), "PowerShell script still contains config control");
 assert(!powerShell.text.includes("soe-webrtc"), "PowerShell script still contains WebRTC");
 assert(!powerShell.text.includes("Authorization"), "PowerShell script should not use authorization headers");
+assert(!powerShell.text.includes("X-Agent-User"), "PowerShell script should not send target user telemetry");
+assert(!powerShell.text.includes("[Environment]::UserName"), "PowerShell script should not read target user");
+assert(!powerShell.text.includes("(Get-Location).Path"), "PowerShell script should not send target cwd telemetry");
 
 const powerShellEnd = await request(`/api/sessions/${powerShellId}/end`, {
   method: "POST"
@@ -147,10 +155,8 @@ assert(powerShellEnd.response.ok, `PowerShell session end returned ${powerShellE
 const hello = await request(`/api/sessions/${id}/hello`, {
   method: "POST",
   headers: {
-    "X-Agent-Platform": "smoke",
-    "X-Agent-User": "smoke"
-  },
-  body: process.cwd()
+    "X-Agent-Platform": "smoke"
+  }
 });
 assert(hello.response.ok, `agent hello returned ${hello.response.status}: ${hello.text}`);
 

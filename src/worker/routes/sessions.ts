@@ -23,7 +23,7 @@ type SessionContext = Context<{ Bindings: Env }>;
 type SessionGuard = { meta: SessionMeta } | { response: Response };
 type ScriptKind = "shell" | "powershell";
 
-const sessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const internalSessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const sessionCodePattern = /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
 
 export function registerSessionRoutes(app: SessionApp): void {
@@ -49,7 +49,7 @@ async function createSession(c: SessionContext, kind: ScriptKind): Promise<Respo
   };
   await putJson(c.env, metaKey(id), meta);
   await putSessionCode(c.env, code, id);
-  logInfo("session_created", { sessionId: id, code, expiresAt: meta.expiresAt });
+  logInfo("session_created", { sessionId: id, expiresAt: meta.expiresAt });
 
   const baseUrl = publicBaseUrl(c.req.raw, c.env);
   const body = kind === "shell" ? shellAgentScript(baseUrl, meta) : powerShellAgentScript(baseUrl, meta);
@@ -58,8 +58,7 @@ async function createSession(c: SessionContext, kind: ScriptKind): Promise<Respo
       "Cache-Control": "no-store",
       "Content-Type": kind === "shell" ? "text/x-shellscript; charset=utf-8" : "text/plain; charset=utf-8",
       "X-Session-Id": code,
-      "X-Session-Code": code,
-      "X-Session-Internal-Id": id
+      "X-Session-Code": code
     }
   });
 }
@@ -81,7 +80,6 @@ async function agentHello(c: SessionContext): Promise<Response> {
   const guard = await requireSession(c.env, c.req.param("id"));
   if ("response" in guard) return guard.response;
 
-  await readLimitedText(c.req.raw, 2000);
   logInfo("agent_connected", { sessionId: guard.meta.id, platform: cleanString(c.req.header("x-agent-platform"), 120) });
   return textResponse("connected\n");
 }
@@ -142,10 +140,9 @@ async function createSessionCode(env: Env): Promise<string> {
 
 async function resolveSessionId(env: Env, id: string | undefined): Promise<string> {
   const value = cleanString(id, 80).toLowerCase();
-  if (sessionIdPattern.test(value)) return value;
   if (!sessionCodePattern.test(value)) return "";
   const sessionId = await resolveSessionCode(env, value);
-  return sessionIdPattern.test(sessionId) ? sessionId : "";
+  return internalSessionIdPattern.test(sessionId) ? sessionId : "";
 }
 
 async function readCommandInput(request: Request): Promise<{ body: string; cwd: string; timeoutSeconds: number }> {
