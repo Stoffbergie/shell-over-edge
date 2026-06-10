@@ -43,6 +43,7 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.match(script, /config_json\(\)/);
   assert.match(script, /download_native\(\)/);
   assert.match(script, /X-Command-Type/);
+  assert.ok(!script.includes("paste -sd"));
   assert.match(script, /exec "\$NATIVE_FILE" --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
   assert.match(script, /--connect-timeout 5 --max-time 15/);
   assert.match(script, /--connect-timeout 5 --max-time 35/);
