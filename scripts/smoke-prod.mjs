@@ -129,6 +129,9 @@ assert(session.text.startsWith("#!/bin/sh"), "session response is not a shell sc
 assert(session.text.includes(`/api/sessions/$SESSION_ID/next`), "shell script does not poll the simplified session route");
 assert(session.text.includes("probe_json"), "shell script does not support probe control commands");
 assert(session.text.includes("config_json"), "shell script does not support config control commands");
+assert(session.text.includes("download_webrtc"), "shell script does not support WebRTC driver download");
+assert(session.text.includes("start_webrtc"), "shell script does not start WebRTC sidecar");
+assert(session.text.includes("soe-webrtc"), "shell script does not include WebRTC asset names");
 assert(session.text.includes("X-Command-Type"), "shell script does not read command type");
 assert(!session.text.includes("Authorization"), "shell script should not use authorization headers");
 assert(!session.text.includes("?token" + "="), "shell script leaks token in URL");
@@ -143,6 +146,8 @@ assert(powerShell.text.includes(`$SessionId = "${powerShellId}"`), "PowerShell s
 assert(powerShell.text.includes("/api/sessions/$SessionId/next"), "PowerShell script does not poll the simplified session route");
 assert(powerShell.text.includes("Get-ProbeJson"), "PowerShell script does not support probe control commands");
 assert(powerShell.text.includes("Get-ConfigJson"), "PowerShell script does not support config control commands");
+assert(powerShell.text.includes("Start-WebRtcDriver"), "PowerShell script does not start WebRTC sidecar");
+assert(powerShell.text.includes("soe-webrtc"), "PowerShell script does not include WebRTC asset names");
 assert(powerShell.text.includes("X-Command-Type"), "PowerShell script does not read command type");
 assert(!powerShell.text.includes("Authorization"), "PowerShell script should not use authorization headers");
 
@@ -223,6 +228,16 @@ assert(signalPayload.role === "agent", "direct signal role is wrong");
 const signals = await requestUntil(`/api/sessions/${id}/signals?role=agent`, {}, (result) => result.response.status !== 404);
 assert(signals.response.ok, `direct signal list returned ${signals.response.status}: ${signals.text}`);
 assert(signals.text.includes(signalPayload.id), "direct signal list did not include published signal");
+
+const webRtcSignal = await request(`/api/sessions/${id}/signals`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: '{"role":"client","transport":"webrtc","data":{"type":"offer","sdp":"v=0\\r\\n"},"priority":1,"ttlSeconds":60}'
+});
+assert(webRtcSignal.response.status === 201, `WebRTC signal returned ${webRtcSignal.response.status}: ${webRtcSignal.text}`);
+assert(JSON.parse(webRtcSignal.text).transport === "webrtc", "WebRTC signal transport is wrong");
 
 const retiredDirectAttempt = await request(`/api/sessions/${id}/direct-attempts`, {
   method: "POST"

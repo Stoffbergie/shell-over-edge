@@ -9,7 +9,7 @@ Use this skill when a user wants shell access to another machine through `https:
 
 ## Core Model
 
-Shell Over Edge uses an 8-character session code as the capability. The remote machine runs a bootstrap that starts the relay agent immediately and can warm or download a native driver when config asks for it. The helper probes capabilities, configures transport when needed, then sends commands to `/send`; the agent executes them locally and returns plain text output.
+Shell Over Edge uses an 8-character session code as the capability. The remote machine runs a bootstrap that starts the relay agent immediately and can warm or download a native driver when config asks for it. `/config webrtc` downloads and starts a `soe-webrtc` sidecar for RTCDataChannel commands while keeping relay available. The helper probes capabilities, configures transport when needed, then sends commands through the active driver or `/send`; the agent executes them locally and returns plain text output.
 
 Current API:
 
@@ -40,7 +40,7 @@ Direct-helper internals:
 
 Use the relay `/send` path by default. Use `/config` as the upgrade door. Only use direct signals when a helper has an actual reachable direct transport and can fall back quickly.
 
-Native binary download is opt-in: set `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, or `SOE_NATIVE_URL` before running the bootstrap, or request `native`, `direct`, or `webrtc` through `/config`.
+Native binary download is opt-in: set `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, or `SOE_NATIVE_URL` before running the bootstrap, or request `native` or `direct` through `/config`. WebRTC sidecar download is opt-in through `/config webrtc` and uses release assets named like `soe-webrtc-aarch64-macos`, `soe-webrtc-x86_64-linux`, and `soe-webrtc-x86_64-windows.exe`.
 
 ## Commands
 
@@ -75,6 +75,12 @@ curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/config --data 'native
 curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/config --data 'webrtc'
 ```
 
+Send through WebRTC after `/config webrtc` reports `active: "webrtc"`:
+
+```sh
+soe-webrtc send --base-url https://soe.stoff.dev --session <code> --body 'pwd'
+```
+
 Send with options:
 
 ```sh
@@ -94,6 +100,7 @@ curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end
 - Do not call retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, or `/connect.sh`.
 - Do not expect JSON from `/send`; treat successful output as plain text.
 - Do expect JSON from `/probe` and `/config`.
+- Do use `soe-webrtc send` for WebRTC DataChannel commands after `/config webrtc`; do not assume plain `/send` changes transport.
 - Do not assume direct signals are reachable; keep direct attempts tightly timed and fall back to `/send`.
 - Do not invent or guess session codes.
 - Do not manually pause, kill, or replace the running agent to upgrade; use `/config`.

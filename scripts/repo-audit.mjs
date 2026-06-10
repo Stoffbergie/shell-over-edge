@@ -23,10 +23,13 @@ const requiredFiles = [
   ".gitattributes",
   "LICENSE",
   "build.zig",
+  "go.mod",
   "llms.txt",
   "native/agent/main.zig",
+  "native/webrtc/main.go",
   "pnpm-workspace.yaml",
   "scripts/build-native-linux.mjs",
+  "scripts/build-webrtc.mjs",
   "scripts/benchmark.mjs",
   "scripts/repo-audit.mjs",
   "scripts/smoke-prod.mjs",
@@ -83,9 +86,12 @@ async function main() {
   if (!pkg.scripts?.benchmark) failures.push("package.json missing benchmark");
   if (!pkg.scripts?.["test:load"]) failures.push("package.json missing test:load");
   if (!pkg.scripts?.["test:native"]) failures.push("package.json missing test:native");
+  if (!pkg.scripts?.["test:webrtc"]) failures.push("package.json missing test:webrtc");
   if (!pkg.scripts?.["test:containers"]) failures.push("package.json missing test:containers");
   if (!pkg.scripts?.["native:build"]) failures.push("package.json missing native:build");
   if (!pkg.scripts?.["native:build:linux"]) failures.push("package.json missing native:build:linux");
+  if (!pkg.scripts?.["webrtc:build"]) failures.push("package.json missing webrtc:build");
+  if (!pkg.scripts?.["webrtc:build:all"]) failures.push("package.json missing webrtc:build:all");
   if (!pkg.scripts?.["typecheck:test"]) failures.push("package.json missing typecheck:test");
   if (!pkg.devDependencies?.vitest) failures.push("package.json missing vitest");
 
@@ -96,9 +102,13 @@ async function main() {
 
   const release = await readText(join(root, ".github/workflows/release.yml"));
   if (!release.includes("mlugg/setup-zig@v2")) failures.push("release workflow must install Zig");
+  if (!release.includes("actions/setup-go@v6")) failures.push("release workflow must install Go");
   if (!release.includes("soe-agent-x86_64-linux-musl")) failures.push("release workflow must build native Linux assets");
   if (!release.includes("soe-agent-aarch64-macos")) failures.push("release workflow must build native macOS assets");
   if (!release.includes("soe-agent-x86_64-windows.exe")) failures.push("release workflow must build native Windows assets");
+  if (!release.includes("soe-webrtc-x86_64-linux")) failures.push("release workflow must build WebRTC Linux assets");
+  if (!release.includes("soe-webrtc-aarch64-macos")) failures.push("release workflow must build WebRTC macOS assets");
+  if (!release.includes("soe-webrtc-x86_64-windows.exe")) failures.push("release workflow must build WebRTC Windows assets");
   if (!release.includes("files: dist/native/*")) failures.push("release workflow must upload native assets");
 
   const readme = await readText(join(root, "README.md"));
@@ -108,6 +118,7 @@ async function main() {
   if (!readme.includes("curl -sS https://soe.stoff.dev/a | sh")) failures.push("README must document POSIX bootstrap");
   if (!readme.includes("pnpm run benchmark")) failures.push("README must document performance benchmark");
   if (!readme.includes("SOE_WARM_NATIVE=1")) failures.push("README must document native download opt-in");
+  if (!readme.includes("soe-webrtc")) failures.push("README must document WebRTC sidecar assets");
   if (!readme.includes("/api/sessions/<code>/probe")) failures.push("README must document probe endpoint");
   if (!readme.includes("/api/sessions/<code>/config")) failures.push("README must document config endpoint");
   if (!readme.includes("/api/sessions/<code>/signals")) failures.push("README must document direct signals");
@@ -123,6 +134,7 @@ async function main() {
   const llms = await readText(join(root, "llms.txt"));
   if (!llms.includes("GET /a")) failures.push("llms.txt must document POSIX bootstrap");
   if (!llms.includes("SOE_WARM_NATIVE=1")) failures.push("llms.txt must document native download opt-in");
+  if (!llms.includes("soe-webrtc")) failures.push("llms.txt must document WebRTC sidecar assets");
   if (!llms.includes("POST /api/sessions")) failures.push("llms.txt must document session creation");
   if (!llms.includes("GET /api/sessions/<code>/probe")) failures.push("llms.txt must document probe endpoint");
   if (!llms.includes("POST /api/sessions/<code>/config")) failures.push("llms.txt must document config endpoint");
@@ -136,6 +148,7 @@ async function main() {
   if (!skill.includes("name: shell-over-edge")) failures.push("Shell Over Edge skill missing name metadata");
   if (!skill.includes("GET https://soe.stoff.dev/a")) failures.push("Shell Over Edge skill must document POSIX bootstrap");
   if (!skill.includes("SOE_WARM_NATIVE=1")) failures.push("Shell Over Edge skill must document native download opt-in");
+  if (!skill.includes("soe-webrtc")) failures.push("Shell Over Edge skill must document WebRTC sidecar assets");
   if (!skill.includes("GET https://soe.stoff.dev/api/sessions/<code>/probe")) failures.push("Shell Over Edge skill must document probe endpoint");
   if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/config")) failures.push("Shell Over Edge skill must document config endpoint");
   if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/send")) failures.push("Shell Over Edge skill must document command send");
