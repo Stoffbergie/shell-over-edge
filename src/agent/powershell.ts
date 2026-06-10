@@ -10,7 +10,6 @@ $AgentVersion = ${quotePowerShell(agentProtocolVersion)}
 $PlatformName = if ($PSVersionTable.Platform) { [string]$PSVersionTable.Platform } else { [string][Environment]::OSVersion.Platform }
 $Headers = @{
   "X-Agent-Platform" = $PlatformName
-  "X-Agent-User" = [Environment]::UserName
 }
 $Clipboard = "copied to clipboard"
 
@@ -155,7 +154,7 @@ Write-Host "Stop anytime: Ctrl+C"
 
 try { [Console]::TreatControlCAsInput = $false } catch {}
 try {
-  Invoke-AgentRequest -Method Post -Path "/api/sessions/$SessionId/hello" -Body ([Text.Encoding]::UTF8.GetBytes((Get-Location).Path)) -ContentType "text/plain" | Out-Null
+  Invoke-AgentRequest -Method Post -Path "/api/sessions/$SessionId/hello" | Out-Null
   while ($true) {
     $BodyFile = [IO.Path]::GetTempFileName()
     $ResultFile = [IO.Path]::GetTempFileName()

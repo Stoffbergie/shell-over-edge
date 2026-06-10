@@ -67,10 +67,18 @@ export async function createSession(app: Hono<{ Bindings: Env }>, fixture: TestF
   }, fixture.env, fixture.ctx);
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
-  const internalId = response.headers.get("X-Session-Internal-Id") || "";
+  assert.equal(response.headers.get("X-Session-Internal-Id"), null);
+  const internalId = await resolveInternalSessionId(fixture, id);
   assert.match(id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
   assert.match(internalId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   return { id, code: id, internalId, script: await response.text(), contentType: response.headers.get("Content-Type") || "" };
+}
+
+async function resolveInternalSessionId(fixture: TestFixture, code: string): Promise<string> {
+  const record = await fixture.mailbox.get(`codes/${code}.json`);
+  assert.ok(record);
+  const value = JSON.parse(await record.text()) as { id?: unknown };
+  return typeof value.id === "string" ? value.id : "";
 }
 
 export class TestExecutionContext {
