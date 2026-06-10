@@ -36,10 +36,6 @@ export class CommandBridge extends DurableObject<Env> {
   private resultWaiters = new Map<string, ResponseWaiter>();
   private recentCommands = new Map<string, number>();
 
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-  }
-
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/send") return this.sendCommand(request);
