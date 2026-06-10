@@ -11,27 +11,6 @@ test("session creation returns relay-only scripts keyed by a short code capabili
   const info = vi.spyOn(console, "info").mockImplementation((line) => {
     infoLines.push(String(line));
   });
-  const root = await app.request("/", {}, fixture.env, fixture.ctx);
-  assert.equal(root.status, 200);
-  const rootText = await text(root);
-  assert.ok(rootText.includes("/api/sessions/<code>/send"));
-  assert.ok(rootText.includes("/api/sessions/<code>/end"));
-
-  const bootstrap = await app.request("/a", {}, fixture.env, fixture.ctx);
-  assert.equal(bootstrap.status, 200);
-  assert.equal(bootstrap.headers.get("Content-Type"), "text/x-shellscript; charset=utf-8");
-  const bootstrapText = await text(bootstrap);
-  assert.match(bootstrapText, /sh "\$AGENT_FILE"/);
-  assert.ok(!bootstrapText.includes("SOE_NATIVE"));
-  assert.ok(!bootstrapText.includes("SOE_AUTO_UPGRADE"));
-
-  const powerShellBootstrap = await app.request("/a.ps1", {}, fixture.env, fixture.ctx);
-  assert.equal(powerShellBootstrap.status, 200);
-  assert.equal(powerShellBootstrap.headers.get("Content-Type"), "text/plain; charset=utf-8");
-  const powerShellBootstrapText = await text(powerShellBootstrap);
-  assert.match(powerShellBootstrapText, /api\/sessions\.ps1/);
-  assert.ok(!powerShellBootstrapText.includes("SOE_NATIVE"));
-
   const shell = await createSession(app, fixture);
   assert.equal(shell.contentType, "text/x-shellscript; charset=utf-8");
   assert.equal(shell.code, shell.id);
@@ -50,8 +29,9 @@ test("session creation returns relay-only scripts keyed by a short code capabili
   assert.ok(!shell.script.includes("$(whoami)"));
   assert.ok(!shell.script.includes("--data-binary \"$(pwd)\""));
   assert.ok(!shell.script.includes("?token" + "="));
+  assert.ok(!shell.script.includes("sh \"$AGENT_FILE\""));
 
-  const powerShell = await createSession(app, fixture, "/api/sessions.ps1");
+  const powerShell = await createSession(app, fixture, "/a.ps1");
   assert.equal(powerShell.contentType, "text/plain; charset=utf-8");
   assert.match(powerShell.id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
   assert.ok(powerShell.script.includes(`$SessionId = "${powerShell.id}"`));
@@ -89,9 +69,9 @@ test("send waits for the agent result and returns plain command output", async (
   assert.equal(hello.status, 200);
   assert.equal(await text(hello), "connected\n");
 
-  const sendJson = app.request(`/api/sessions/${session.id}/send`, {
+  const sendJson = app.request(`/api/sessions/${session.id}/send?timeout=12`, {
     method: "POST",
-    body: '{"body":"pwd","cwd":"/tmp","timeoutSeconds":12}'
+    body: '{"body":"pwd","cwd":"/tmp"}'
   }, fixture.env, fixture.ctx);
 
   const nextJson = await waitForNext(session.id, fixture);
@@ -138,9 +118,9 @@ test("parallel sends keep command results matched under burst load", async () =>
     const body = `printf item-${index}`;
     return {
       body,
-      response: app.request(`/api/sessions/${session.id}/send`, {
+      response: app.request(`/api/sessions/${session.id}/send?timeout=20`, {
         method: "POST",
-        body: JSON.stringify({ body, timeoutSeconds: 20 })
+        body: JSON.stringify({ body })
       }, fixture.env, fixture.ctx)
     };
   });
@@ -178,9 +158,9 @@ test("parallel sends keep command results matched under burst load", async () =>
 test("late known command results are acknowledged after helper timeout", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);
-  const send = app.request(`/api/sessions/${session.id}/send`, {
+  const send = app.request(`/api/sessions/${session.id}/send?timeout=1`, {
     method: "POST",
-    body: '{"body":"slow","timeoutSeconds":1}'
+    body: '{"body":"slow"}'
   }, fixture.env, fixture.ctx);
 
   const next = await waitForNext(session.id, fixture);
@@ -226,6 +206,13 @@ test("invalid sessions, bad send payloads, and removed routes return text errors
   assert.equal(invalidPayload.status, 400);
   assert.equal(await text(invalidPayload), "Invalid JSON command payload\n");
 
+  const bodyTimeout = await app.request(`/api/sessions/${session.id}/send`, {
+    method: "POST",
+    body: '{"body":"pwd","timeoutSeconds":12}'
+  }, fixture.env, fixture.ctx);
+  assert.equal(bodyTimeout.status, 400);
+  assert.equal(await text(bodyTimeout), "Use ?timeout= for command timeout\n");
+
   assert.equal((await app.request(`/api/sessions/${session.id}/probe`, {}, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request(`/api/sessions/${session.id}/config`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request(`/api/sessions/${session.id}/ice`, {}, fixture.env, fixture.ctx)).status, 404);
@@ -237,6 +224,9 @@ test("invalid sessions, bad send payloads, and removed routes return text errors
   assert.equal((await app.request(`/api/sessions/${session.id}/candidates`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request(`/api/sessions/${session.id}/direct-attempts`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request("/connect.sh", {}, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request("/a", {}, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request("/api/sessions", { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request("/api/sessions.ps1", { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
 
   const end = await app.request(`/api/sessions/${session.id}/end`, { method: "POST" }, fixture.env, fixture.ctx);
   assert.equal(end.status, 200);

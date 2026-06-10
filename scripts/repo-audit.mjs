@@ -151,16 +151,22 @@ async function main() {
   const readme = await readText(join(root, "README.md"));
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
   if (!readme.includes("Reach any shell from anywhere.")) failures.push("README one-liner is wrong");
-  if (!readme.includes("## Demo")) failures.push("README must include a concrete demo");
+  if (readme.includes("## Demo")) failures.push("README should stay concise and omit a demo section");
   if (!readme.includes("```mermaid")) failures.push("README must include a Mermaid flow diagram");
-  if (!readme.includes("## Requirements")) failures.push("README must document runtime requirements");
+  if (!readme.includes("Requirements:")) failures.push("README must document runtime requirements");
   if (!readme.includes("## Fresh Clone")) failures.push("README must document fresh-clone setup");
   if (!readme.includes("corepack enable")) failures.push("README must document Corepack setup");
   if (!readme.includes("pnpm install --frozen-lockfile")) failures.push("README must use frozen-lockfile install");
   if (!readme.includes("pnpm run validate")) failures.push("README must document validate");
   if (!readme.includes("## Tech Decisions")) failures.push("README must explain tech decisions");
-  if (!readme.includes("curl -sS https://soe.stoff.dev/a | sh")) failures.push("README must document POSIX bootstrap");
+  if (!readme.includes("curl -sS https://soe.stoff.dev | sh")) failures.push("README must document root POSIX bootstrap");
+  if (readme.includes("curl -sS https://soe.stoff.dev/a | sh")) failures.push("README still documents retired /a POSIX bootstrap");
   if (!readme.includes("/api/sessions/<code>/send")) failures.push("README must document send endpoint");
+  if (!readme.includes("send?timeout=30")) failures.push("README must document URL timeout");
+  if (readme.includes("timeoutSeconds")) failures.push("README must not document timeoutSeconds");
+  if (readme.includes("`POST` | `/api/sessions` |") || readme.includes("`POST` | `/api/sessions.ps1` |")) {
+    failures.push("README must not document retired session creation endpoints");
+  }
   if (!readme.includes("pnpm run benchmark")) failures.push("README must document performance benchmark");
   if (!readme.includes("llms.txt")) failures.push("README must link llms.txt");
   if (!readme.includes("skills/shell-over-edge/SKILL.md")) failures.push("README must link the Shell Over Edge skill");
@@ -168,15 +174,26 @@ async function main() {
   if (readme.includes("Authorization: Bearer")) failures.push("README must not document retired bearer-token API");
 
   const llms = await readText(join(root, "llms.txt"));
-  if (!llms.includes("GET /a")) failures.push("llms.txt must document POSIX bootstrap");
-  if (!llms.includes("POST /api/sessions")) failures.push("llms.txt must document session creation");
+  if (!llms.includes("`GET /`: POSIX agent script.")) failures.push("llms.txt must document root POSIX agent");
+  if (llms.includes("`GET /a`: POSIX bootstrap.")) failures.push("llms.txt still documents retired /a POSIX bootstrap");
   if (!llms.includes("POST /api/sessions/<code>/send")) failures.push("llms.txt must document command send");
+  if (!llms.includes("send?timeout=30")) failures.push("llms.txt must document URL timeout");
+  if (llms.includes("timeoutSeconds")) failures.push("llms.txt must not document timeoutSeconds");
+  if (llms.includes("`POST /api/sessions`:") || llms.includes("`POST /api/sessions.ps1`:")) {
+    failures.push("llms.txt must not document retired session creation endpoints");
+  }
   if (llms.includes("Authorization: Bearer")) failures.push("llms.txt must not document retired bearer-token API");
 
   const skill = await readText(join(root, "skills/shell-over-edge/SKILL.md"));
   if (!skill.includes("name: shell-over-edge")) failures.push("Shell Over Edge skill missing name metadata");
-  if (!skill.includes("GET https://soe.stoff.dev/a")) failures.push("Shell Over Edge skill must document POSIX bootstrap");
+  if (!skill.includes("`GET https://soe.stoff.dev` returns a POSIX agent script")) failures.push("Shell Over Edge skill must document root POSIX agent");
+  if (skill.includes("GET https://soe.stoff.dev/a` returns a POSIX bootstrap script")) failures.push("Shell Over Edge skill still documents retired /a POSIX bootstrap");
   if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/send")) failures.push("Shell Over Edge skill must document command send");
+  if (!skill.includes("send?timeout=30")) failures.push("Shell Over Edge skill must document URL timeout");
+  if (skill.includes("timeoutSeconds")) failures.push("Shell Over Edge skill must not document timeoutSeconds");
+  if (skill.includes("`POST https://soe.stoff.dev/api/sessions` returns") || skill.includes("`POST https://soe.stoff.dev/api/sessions.ps1` returns")) {
+    failures.push("Shell Over Edge skill must not document retired session creation endpoints");
+  }
   if (skill.includes("Authorization: Bearer")) failures.push("Shell Over Edge skill must not document retired bearer-token API");
 
   if (failures.length > 0) {

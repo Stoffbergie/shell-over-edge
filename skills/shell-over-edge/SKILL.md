@@ -13,11 +13,9 @@ Shell Over Edge uses an 8-character session code as the capability. The target r
 
 ## API
 
-- `GET https://soe.stoff.dev/a` returns a POSIX bootstrap script.
-- `GET https://soe.stoff.dev/a.ps1` returns a PowerShell bootstrap script.
-- `POST https://soe.stoff.dev/api/sessions` returns a POSIX relay agent script.
-- `POST https://soe.stoff.dev/api/sessions.ps1` returns a PowerShell relay agent script.
-- `POST https://soe.stoff.dev/api/sessions/<code>/send` sends a command.
+- `GET https://soe.stoff.dev` returns a POSIX agent script.
+- `GET https://soe.stoff.dev/a.ps1` returns a PowerShell agent script.
+- `POST https://soe.stoff.dev/api/sessions/<code>/send?timeout=30` sends a command.
 - `POST https://soe.stoff.dev/api/sessions/<code>/end` closes the session.
 
 ## Workflow
@@ -33,7 +31,7 @@ Shell Over Edge uses an 8-character session code as the capability. The target r
 Create a POSIX session:
 
 ```sh
-curl -sS https://soe.stoff.dev/a | sh
+curl -sS https://soe.stoff.dev | sh
 ```
 
 Create a PowerShell session:
@@ -51,8 +49,8 @@ curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'pwd'
 Send with options:
 
 ```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send \
-  --data '{"body":"pwd","cwd":"/tmp","timeoutSeconds":30}'
+curl -sS -X POST 'https://soe.stoff.dev/api/sessions/<code>/send?timeout=30' \
+  --data '{"body":"pwd","cwd":"/tmp"}'
 ```
 
 End the session:
@@ -65,6 +63,7 @@ curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end
 
 - Do not use bearer tokens, helper tokens, agent tokens, or URL tokens.
 - Do not call retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, or `/connect.sh`.
+- Put command timeout in the URL as `?timeout=30`, not in the JSON body.
 - Do not expect JSON from `/send`; treat successful output as plain text.
 - Do not invent or guess session codes.
 - Keep commands explicit, scoped, and reversible.

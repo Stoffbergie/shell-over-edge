@@ -6,8 +6,8 @@ console.info = () => {};
 
 test("matches parallel command results by command id", async () => {
   const bridge = new CommandBridgeCore();
-  const first = sendCommand(bridge, { body: "printf one", cwd: "/tmp", timeoutSeconds: 10 });
-  const second = sendCommand(bridge, { body: "printf two", timeoutSeconds: 10 });
+  const first = sendCommand(bridge, { body: "printf one", cwd: "/tmp", timeout: 10 });
+  const second = sendCommand(bridge, { body: "printf two", timeout: 10 });
 
   const firstCommand = await nextCommand(bridge);
   const secondCommand = await nextCommand(bridge);
@@ -39,7 +39,7 @@ test("end resolves pending polls and sends", async () => {
   assert.equal(await pollResponse.text(), "Session ended\n");
 
   const sendBridge = new CommandBridgeCore();
-  const pendingSend = sendCommand(sendBridge, { body: "queued", timeoutSeconds: 10 });
+  const pendingSend = sendCommand(sendBridge, { body: "queued", timeout: 10 });
   await sleep(0);
   const sendEnd = await sendBridge.fetch(new Request("https://session/end", { method: "POST" }));
   assert.equal(sendEnd.status, 200);
@@ -51,7 +51,7 @@ test("end resolves pending polls and sends", async () => {
 
 test("acknowledges late known results after command timeout", async () => {
   const bridge = new CommandBridgeCore();
-  const send = sendCommand(bridge, { body: "slow", timeoutSeconds: 1 });
+  const send = sendCommand(bridge, { body: "slow", timeout: 1 });
   const command = await nextCommand(bridge);
   assert.equal(command.body, "slow");
 
@@ -70,7 +70,7 @@ test("acknowledges late known results after command timeout", async () => {
   assert.equal(await missing.text(), "Command not found\n");
 });
 
-function sendCommand(bridge: CommandBridgeCore, body: { body: string; cwd?: string; timeoutSeconds?: number }): Promise<Response> {
+function sendCommand(bridge: CommandBridgeCore, body: { body: string; cwd?: string; timeout?: number }): Promise<Response> {
   return bridge.fetch(new Request("https://session/send", {
     method: "POST",
     body: JSON.stringify(body)

@@ -63,7 +63,7 @@ for (const target of targets) {
 }
 
 async function createSession(baseUrl: string): Promise<{ id: string; script: string }> {
-  const response = await fetch(`${baseUrl}/api/sessions`, { method: "POST" });
+  const response = await fetch(baseUrl);
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
   assert.match(id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
@@ -71,9 +71,9 @@ async function createSession(baseUrl: string): Promise<{ id: string; script: str
 }
 
 async function sendCommand(baseUrl: string, id: string, body: string, details = () => ""): Promise<{ status: number; text: string }> {
-  const response = await fetch(`${baseUrl}/api/sessions/${id}/send`, {
+  const response = await fetch(`${baseUrl}/api/sessions/${id}/send?timeout=10`, {
     method: "POST",
-    body: JSON.stringify({ body, timeoutSeconds: 10 })
+    body: JSON.stringify({ body })
   });
   const result = { status: response.status, text: await response.text() };
   assert.notEqual(result.status, 504, `${result.text}\n${details()}`);
