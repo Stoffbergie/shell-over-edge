@@ -7,6 +7,34 @@ Reach any shell from anywhere.
 
 Shell Over Edge is a tiny HTTPS relay for temporary shell access. The target machine runs a generated script, prints an 8-character code, and long-polls the Cloudflare Worker for commands. The sender posts commands to that code and gets plain text output back.
 
+It is for short-lived troubleshooting when SSH, VPN, or inbound networking is unavailable. The code is the capability, so there are no accounts, tokens, browser sessions, or local daemons to keep around after the session ends.
+
+## Demo
+
+Target machine:
+
+```sh
+$ curl -sS https://soe.stoff.dev/a | sh
+Session: 1234abcd (copied to clipboard)
+Stop anytime: Ctrl+C
+```
+
+Sender:
+
+```sh
+$ curl -sS -X POST https://soe.stoff.dev/api/sessions/1234abcd/send --data 'pwd'
+/tmp
+
+$ curl -sS -X POST https://soe.stoff.dev/api/sessions/1234abcd/send \
+  --data '{"body":"printf hello","cwd":"/tmp","timeoutSeconds":10}'
+hello
+
+$ curl -sS -X POST https://soe.stoff.dev/api/sessions/1234abcd/end
+ended
+```
+
+## Architecture
+
 ```mermaid
 sequenceDiagram
     participant Target as "Target shell"
@@ -25,6 +53,10 @@ sequenceDiagram
     Target->>Bridge: "POST /result/:id"
     Bridge-->>Sender: "plain text output"
 ```
+
+Cloudflare Worker routes create sessions and validate short codes. Session metadata lives in R2. A Durable Object owns the live queue for each session, pairs each command with its result, and handles parallel sends without mixing outputs.
+
+No client credentials are needed. The session code is the capability. Sessions expire after 2 hours.
 
 ## Use
 
@@ -85,29 +117,34 @@ JSON command bodies are optional:
 
 Raw text is preferred for quick commands.
 
-## Architecture
+## Requirements
 
-Cloudflare Worker routes create sessions and validate short codes. Session metadata lives in R2. A Durable Object owns the live queue for each session, pairs each command with its result, and handles parallel sends without mixing outputs.
+- Node.js 24 or newer
+- pnpm 11.5.2 via Corepack
+- Docker, only for `pnpm run test:containers`
 
-No client credentials are needed. The session code is the capability. Sessions expire after 2 hours.
-
-## Limits
-
-| Item | Limit |
-| --- | --- |
-| Session code | 8 characters |
-| Session TTL | 2 hours |
-| Command body | 64 KB |
-| Result body | 1 MB |
-| Command timeout | 1-50 seconds |
-
-## Development
+## Fresh Clone
 
 ```sh
-pnpm install
-pnpm run dev
-pnpm run test
+corepack enable
+pnpm install --frozen-lockfile
 pnpm run validate
+```
+
+`pnpm run validate` runs typecheck, test typecheck, lint, Vitest, repo audit, and a Cloudflare Worker dry-run bundle.
+
+## Local Development
+
+Start the Worker:
+
+```sh
+pnpm run dev
+```
+
+Check it from another terminal:
+
+```sh
+curl -sS http://127.0.0.1:8787/
 ```
 
 Load and generated-agent checks:
@@ -123,6 +160,24 @@ Production smoke:
 ```sh
 SOE_BASE_URL=https://soe.stoff.dev pnpm run smoke:prod
 ```
+
+## Tech Decisions
+
+- Cloudflare Worker keeps the public surface to one HTTPS deployment with no long-running server to operate.
+- Durable Objects give each session a single ordered queue, which keeps parallel sends from mixing command results.
+- R2 stores only session metadata and code lookup records; command bodies and outputs stay in the live Durable Object path.
+- Generated POSIX and PowerShell agents avoid binary installs, native build chains, and platform-specific release assets.
+- An 8-character code keeps the operator flow fast, while short TTLs and explicit `/end` keep the capability temporary.
+
+## Limits
+
+| Item | Limit |
+| --- | --- |
+| Session code | 8 characters |
+| Session TTL | 2 hours |
+| Command body | 64 KB |
+| Result body | 1 MB |
+| Command timeout | 1-50 seconds |
 
 ## Layout
 
@@ -144,6 +199,6 @@ scripts/
   repo-audit.mjs                 repo hygiene guard
 ```
 
-Agent instructions for LLMs: [llms.txt](llms.txt)
+Automation instructions: [llms.txt](llms.txt)
 
-Codex skill: [skills/shell-over-edge/SKILL.md](skills/shell-over-edge/SKILL.md)
+Agent skill: [skills/shell-over-edge/SKILL.md](skills/shell-over-edge/SKILL.md)

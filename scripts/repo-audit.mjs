@@ -150,12 +150,20 @@ async function main() {
   const readme = await readText(join(root, "README.md"));
   if (!readme.includes("# Shell Over Edge")) failures.push("README must use the full product name");
   if (!readme.includes("Reach any shell from anywhere.")) failures.push("README one-liner is wrong");
+  if (!readme.includes("## Demo")) failures.push("README must include a concrete demo");
   if (!readme.includes("```mermaid")) failures.push("README must include a Mermaid flow diagram");
+  if (!readme.includes("## Requirements")) failures.push("README must document runtime requirements");
+  if (!readme.includes("## Fresh Clone")) failures.push("README must document fresh-clone setup");
+  if (!readme.includes("corepack enable")) failures.push("README must document Corepack setup");
+  if (!readme.includes("pnpm install --frozen-lockfile")) failures.push("README must use frozen-lockfile install");
+  if (!readme.includes("pnpm run validate")) failures.push("README must document validate");
+  if (!readme.includes("## Tech Decisions")) failures.push("README must explain tech decisions");
   if (!readme.includes("curl -sS https://soe.stoff.dev/a | sh")) failures.push("README must document POSIX bootstrap");
   if (!readme.includes("/api/sessions/<code>/send")) failures.push("README must document send endpoint");
   if (!readme.includes("pnpm run benchmark")) failures.push("README must document performance benchmark");
   if (!readme.includes("llms.txt")) failures.push("README must link llms.txt");
   if (!readme.includes("skills/shell-over-edge/SKILL.md")) failures.push("README must link the Shell Over Edge skill");
+  if (readme.includes("Codex")) failures.push("README must not mention internal tooling");
   if (readme.includes("Authorization: Bearer")) failures.push("README must not document retired bearer-token API");
 
   const llms = await readText(join(root, "llms.txt"));
