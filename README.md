@@ -24,7 +24,8 @@ sequenceDiagram
     Helper->>Worker: POST /api/sessions
     Worker-->>Helper: relay agent script + X-Session-Id
 
-    Note over Agent: relay starts immediately; native download can warm in background
+    Agent->>Agent: start relay immediately
+    Agent->>Agent: optionally warm native download
     Agent->>Worker: POST /api/sessions/:id/hello
     Agent->>Worker: GET /api/sessions/:id/next
     Worker->>Bridge: wait for command
