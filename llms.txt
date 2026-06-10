@@ -1,69 +1,32 @@
 # Shell Over Edge
 
-Shell Over Edge gives temporary shell access through a simple HTTPS relay.
+Temporary shell access over HTTPS.
 
-## Core Flow
+## Flow
 
-1. Ask the user to start an agent on the target machine.
-2. Read the 8-character session code.
-3. Send commands with `/send`.
-4. Treat successful `/send` responses as plain text command output.
-5. Close the session with `/end`.
-
-## Start Agents
-
-POSIX:
-
-```sh
-curl -sS https://soe.stoff.dev | sh
-```
-
-PowerShell:
-
-```powershell
-irm https://soe.stoff.dev/a.ps1 | iex
-```
+- Ask the user to start an agent on the target.
+- POSIX: `curl -sS https://soe.stoff.dev | sh`
+- PowerShell: `irm https://soe.stoff.dev/a.ps1 | iex`
+- Use the printed 8-character code.
+- Send raw: `curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'pwd'`
+- Send with cwd/timeout: `curl -sS -X POST 'https://soe.stoff.dev/api/sessions/<code>/send?timeout=30' --data '{"body":"pwd","cwd":"/tmp"}'`
+- Read successful `/send` responses as plain text.
+- End: `curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end`
 
 ## API
 
 - `GET /`: POSIX agent script.
 - `GET /a.ps1`: PowerShell agent script.
-- `POST /api/sessions/<code>/send?timeout=30`: send a command.
+- `POST /api/sessions/<code>/send?timeout=30`: send one command; body is raw text or `{"body":"pwd","cwd":"/tmp"}`.
 - `POST /api/sessions/<code>/end`: close the session.
-
-Raw command:
-
-```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'pwd'
-```
-
-Command with options:
-
-```sh
-curl -sS -X POST 'https://soe.stoff.dev/api/sessions/<code>/send?timeout=30' \
-  --data '{"body":"pwd","cwd":"/tmp"}'
-```
-
-End:
-
-```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end
-```
 
 ## Rules
 
-- Do not use bearer tokens or URL tokens.
-- Do not invent session codes.
-- Do not call retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, or `/connect.sh`.
-- Do not expect JSON from `/send`; command output is plain text.
-- Put command timeout in the URL as `?timeout=30`, not in the JSON body.
-- Prefer raw command bodies unless `cwd` or timeout control is needed.
-- Keep commands explicit, scoped, and reversible.
-- Close sessions when done.
+- No bearer tokens, URL tokens, or invented codes.
+- Timeout belongs in `?timeout=30`; JSON only supports `body` and `cwd`.
+- Do not call retired endpoints: `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, `/connect.sh`.
+- Keep commands explicit and reversible. Close sessions with `/end`.
 
 ## Limits
 
-- Session TTL: 2 hours.
-- Command body: 64 KB.
-- Result body: 1 MB.
-- Timeout: 1-50 seconds.
+TTL 2 hours. Command body 64 KB. Result body 1 MB. Timeout 1-50 seconds.
