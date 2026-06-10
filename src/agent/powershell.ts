@@ -46,6 +46,8 @@ function Invoke-AgentRequest {
   param([string]$Method, [string]$Path, [string]$OutFile, [byte[]]$Body, [string]$ContentType)
   $Request = [System.Net.WebRequest]::Create("$BaseUrl$Path")
   $Request.Method = $Method
+  $Request.Timeout = 35000
+  try { $Request.ReadWriteTimeout = 35000 } catch {}
   foreach ($Key in $Headers.Keys) {
     $Request.Headers.Add($Key, [string]$Headers[$Key])
   }

@@ -23,7 +23,7 @@ post_bye() {
     return 0
   fi
   if [ -n "\${SESSION_ID:-}" ]; then
-    curl -fsS -X POST "$BASE_URL/api/sessions/$SESSION_ID/end" >/dev/null 2>&1 || true
+    curl -fsS --connect-timeout 5 --max-time 10 -X POST "$BASE_URL/api/sessions/$SESSION_ID/end" >/dev/null 2>&1 || true
   fi
 }
 
@@ -72,7 +72,7 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-curl -fsS -D "$HEADERS_FILE" -o "$AGENT_FILE" -X POST "$BASE_URL/api/sessions"
+curl -fsS --connect-timeout 5 --max-time 20 -D "$HEADERS_FILE" -o "$AGENT_FILE" -X POST "$BASE_URL/api/sessions"
 SESSION_ID=$(header_value X-Session-Id "$HEADERS_FILE")
 if [ -z "$SESSION_ID" ]; then
   printf 'Could not read session id\\n' >&2
@@ -120,7 +120,7 @@ function Stop-RelayAgent {
 
 function Send-Bye {
   if ($Upgraded -or [string]::IsNullOrWhiteSpace($SessionId)) { return }
-  try { Invoke-WebRequest -Method Post -Uri "$BaseUrl/api/sessions/$SessionId/end" -UseBasicParsing | Out-Null } catch {}
+  try { Invoke-WebRequest -Method Post -Uri "$BaseUrl/api/sessions/$SessionId/end" -UseBasicParsing -TimeoutSec 10 | Out-Null } catch {}
 }
 
 function Get-NativeName {
@@ -149,7 +149,7 @@ function Start-NativeDownload {
 
 try {
   New-Item -ItemType Directory -Path $WorkDir | Out-Null
-  $Response = Invoke-WebRequest -Method Post -Uri "$BaseUrl/api/sessions.ps1" -UseBasicParsing
+  $Response = Invoke-WebRequest -Method Post -Uri "$BaseUrl/api/sessions.ps1" -UseBasicParsing -TimeoutSec 20
   [IO.File]::WriteAllText($AgentPath, [string]$Response.Content)
   $SessionId = [string]$Response.Headers["X-Session-Id"]
   if ([string]::IsNullOrWhiteSpace($SessionId)) { throw "Could not read session id" }
