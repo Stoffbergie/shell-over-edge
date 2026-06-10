@@ -108,6 +108,8 @@ async function main() {
   if (!readme.includes("curl -sS https://soe.stoff.dev/a | sh")) failures.push("README must document POSIX bootstrap");
   if (!readme.includes("pnpm run benchmark")) failures.push("README must document performance benchmark");
   if (!readme.includes("SOE_WARM_NATIVE=1")) failures.push("README must document native download opt-in");
+  if (!readme.includes("/api/sessions/<code>/probe")) failures.push("README must document probe endpoint");
+  if (!readme.includes("/api/sessions/<code>/config")) failures.push("README must document config endpoint");
   if (!readme.includes("/api/sessions/<code>/signals")) failures.push("README must document direct signals");
   if (!readme.includes("/api/sessions/<code>/ice")) failures.push("README must document ICE config");
   if (!readme.includes("agent/main.zig")) failures.push("README must document native agent layout");
@@ -122,6 +124,8 @@ async function main() {
   if (!llms.includes("GET /a")) failures.push("llms.txt must document POSIX bootstrap");
   if (!llms.includes("SOE_WARM_NATIVE=1")) failures.push("llms.txt must document native download opt-in");
   if (!llms.includes("POST /api/sessions")) failures.push("llms.txt must document session creation");
+  if (!llms.includes("GET /api/sessions/<code>/probe")) failures.push("llms.txt must document probe endpoint");
+  if (!llms.includes("POST /api/sessions/<code>/config")) failures.push("llms.txt must document config endpoint");
   if (!llms.includes("POST /api/sessions/<code>/send")) failures.push("llms.txt must document command send");
   if (!llms.includes("POST /api/sessions/<code>/signals")) failures.push("llms.txt must document direct signals");
   if (!llms.includes("GET /api/sessions/<code>/ice")) failures.push("llms.txt must document ICE config");
@@ -132,6 +136,8 @@ async function main() {
   if (!skill.includes("name: shell-over-edge")) failures.push("Shell Over Edge skill missing name metadata");
   if (!skill.includes("GET https://soe.stoff.dev/a")) failures.push("Shell Over Edge skill must document POSIX bootstrap");
   if (!skill.includes("SOE_WARM_NATIVE=1")) failures.push("Shell Over Edge skill must document native download opt-in");
+  if (!skill.includes("GET https://soe.stoff.dev/api/sessions/<code>/probe")) failures.push("Shell Over Edge skill must document probe endpoint");
+  if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/config")) failures.push("Shell Over Edge skill must document config endpoint");
   if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/send")) failures.push("Shell Over Edge skill must document command send");
   if (!skill.includes("POST https://soe.stoff.dev/api/sessions/<code>/signals")) failures.push("Shell Over Edge skill must document direct signals");
   if (!skill.includes("GET https://soe.stoff.dev/api/sessions/<code>/ice")) failures.push("Shell Over Edge skill must document ICE config");

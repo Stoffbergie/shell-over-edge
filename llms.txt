@@ -10,6 +10,8 @@ Shell Over Edge creates short-lived 8-character session codes. A bootstrap start
 - Create PowerShell bootstrap: `GET /a.ps1`
 - Create POSIX session: `POST /api/sessions`
 - Create PowerShell session: `POST /api/sessions.ps1`
+- Probe machine and transport support: `GET /api/sessions/<code>/probe`
+- Configure transport: `POST /api/sessions/<code>/config`
 - Send command: `POST /api/sessions/<code>/send`
 - End session: `POST /api/sessions/<code>/end`
 
@@ -45,9 +47,28 @@ Use JSON only when setting options:
 
 `timeout` is also accepted. Timeouts are clamped to 1-3600 seconds. The synchronous `/send` waits up to the platform-safe bridge wait and returns `504` if no result arrives.
 
+## Probe And Config
+
+Call `/probe` after receiving a session code. It returns JSON from the running agent with OS, hardware, runtime command availability, coarse network stats, active transport, and support flags for `relay`, `native`, `directHttp`, `webrtc`, and `webrtcSignaling`.
+
+Use `/config` as the only upgrade door. Plain text bodies are preferred:
+
+```sh
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/config --data 'native'
+curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/config --data 'webrtc'
+```
+
+JSON is also accepted:
+
+```json
+{"transport":"native"}
+```
+
+Valid values are `auto`, `relay`, `native`, `direct`, and `webrtc`. The response is JSON with `requested`, `active`, `upgraded`, `fallback`, and `reason` fields. If a requested transport cannot activate, keep using `/send` with the reported active fallback.
+
 ## Direct Upgrade
 
-The relay route is the universal fallback. Rich helpers can use the public service as rendezvous: fetch ICE config when using WebRTC, exchange short-lived direct signals, try a direct stream with a small timeout, then fall back to `/send` if direct fails.
+The relay route is the universal fallback. Rich helpers should start with `/probe` and `/config`. Driver-level helpers can still use the public service as rendezvous: fetch ICE config when using WebRTC, exchange short-lived direct signals, try a direct stream with a small timeout, then fall back to `/send` if direct fails.
 
 HTTP direct signal payload:
 
@@ -68,8 +89,9 @@ Direct command endpoints should accept the same JSON command payload and return 
 - Sessions are short code capabilities.
 - The response header `X-Session-Id` contains the code for newly created sessions.
 - Generated agents print the code and copy it to the clipboard when possible.
-- The bootstrap only downloads native binaries when `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, or `SOE_NATIVE_URL` is set.
+- The bootstrap only downloads native binaries when `SOE_WARM_NATIVE=1`, `SOE_AUTO_UPGRADE=1`, `SOE_NATIVE_URL` is set, or `/config` asks for a driver-backed transport.
 - Most responses are plain text by design.
+- `/probe` and `/config` intentionally return JSON because they are machine-readable control endpoints.
 - No bearer tokens, helper tokens, agent tokens, URL tokens, or auth headers are used in the current API.
 - Generated curl-first agents do not open inbound direct listeners by default.
 - Retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, and `/connect.sh` are invalid.
@@ -86,6 +108,8 @@ Direct command endpoints should accept the same JSON command payload and return 
 - Do not invent session IDs; use the code printed by the agent or the `X-Session-Id` header.
 - Prefer raw text `/send` bodies for simple commands.
 - Use JSON `/send` only for `cwd` or timeout control.
+- Use `/probe` before guessing OS, hardware, or transport support.
+- Use `/config` to request `native`, `direct`, or `webrtc`; do not manually pause or replace agents.
 - Keep commands explicit and reversible.
 - End sessions with `/end` when finished.
 - Do not depend on undocumented response JSON.
