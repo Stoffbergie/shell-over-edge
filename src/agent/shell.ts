@@ -1,5 +1,5 @@
 import type { SessionMeta } from "../domain/session";
-import { agentProtocolVersion, nativeReleaseBaseUrl } from "../shared/config";
+import { agentProtocolVersion, nativeReleaseBaseUrl, releaseAssetDownloadTimeoutSeconds } from "../shared/config";
 import { quoteShell } from "../shared/strings";
 
 export function shellAgentScript(baseUrl: string, meta: SessionMeta): string {
@@ -98,7 +98,7 @@ download_native() {
     [ -n "$name" ] || return 1
     url="$NATIVE_BASE_URL/$name"
   fi
-  curl -fsSL --connect-timeout 5 --max-time 40 -o "$NATIVE_FILE.tmp" "$url" >/dev/null 2>&1 || return 1
+  curl -fsSL --connect-timeout 5 --max-time ${releaseAssetDownloadTimeoutSeconds} -o "$NATIVE_FILE.tmp" "$url" >/dev/null 2>&1 || return 1
   chmod +x "$NATIVE_FILE.tmp" || return 1
   mv "$NATIVE_FILE.tmp" "$NATIVE_FILE"
 }
@@ -114,7 +114,7 @@ download_webrtc() {
     [ -n "$name" ] || return 1
     url="$WEBRTC_BASE_URL/$name"
   fi
-  curl -fsSL --connect-timeout 5 --max-time 40 -o "$WEBRTC_FILE.tmp" "$url" >/dev/null 2>&1 || return 1
+  curl -fsSL --connect-timeout 5 --max-time ${releaseAssetDownloadTimeoutSeconds} -o "$WEBRTC_FILE.tmp" "$url" >/dev/null 2>&1 || return 1
   chmod +x "$WEBRTC_FILE.tmp" || return 1
   mv "$WEBRTC_FILE.tmp" "$WEBRTC_FILE"
 }

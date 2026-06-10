@@ -8,5 +8,6 @@ export const directSignalTtlMs = 60 * 1000;
 export const maxDirectSignalsPerRole = 32;
 export const defaultTurnCredentialTtlSeconds = sessionTtlMs / 1000;
 export const maxTurnCredentialTtlSeconds = 48 * 60 * 60;
-export const agentProtocolVersion = "0.2.0";
+export const agentProtocolVersion = "0.2.1";
 export const nativeReleaseBaseUrl = "https://github.com/Stoffberg/shell-over-edge/releases/latest/download";
+export const releaseAssetDownloadTimeoutSeconds = 300;
