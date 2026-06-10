@@ -35,3 +35,7 @@ No open items.
 - [x] P0: Fix fresh-clone install failure from unnecessary `sharp` build approval.
   - Fixed: set `sharp: false` in `pnpm-workspace.yaml` so pnpm explicitly skips the unused transitive postinstall instead of trying to compile it or failing as unapproved.
   - Proof: temp copy without `node_modules` ran `corepack enable`, `pnpm install --frozen-lockfile`, `pnpm run validate`, `pnpm run build`, and local `pnpm run dev` plus root output grep for bootstrap, send, and end commands.
+
+- [x] P1: Align CI with the package quality gate.
+  - Fixed: CI validate now calls `pnpm run validate`, and `repo-audit` guards that workflow contract so lint/tests/build proof do not drift.
+  - Proof: `pnpm run validate`; `pnpm run build`; local `pnpm run dev` plus root output grep for bootstrap, send, and end commands.

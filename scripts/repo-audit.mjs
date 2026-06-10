@@ -141,6 +141,7 @@ async function main() {
   if (ci.includes("setup-go") || ci.includes("setup-zig") || ci.includes("test:native") || ci.includes("test:webrtc")) {
     failures.push("CI still installs or tests removed native/WebRTC tooling");
   }
+  if (!ci.includes("run: pnpm run validate")) failures.push("CI validate job must run pnpm run validate");
 
   const wrangler = await readText(join(root, "wrangler.toml"));
   for (const value of ['name = "soe"', 'BASE_URL = "https://soe.stoff.dev"', 'pattern = "soe.stoff.dev"', 'bucket_name = "soe-mailbox"']) {
