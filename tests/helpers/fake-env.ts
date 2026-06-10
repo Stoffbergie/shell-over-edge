@@ -53,16 +53,14 @@ export async function text(response: Response): Promise<string> {
   return response.text();
 }
 
-export async function createSession(app: Hono<{ Bindings: Env }>, fixture: TestFixture, path = "/api/sessions"): Promise<{
+export async function createSession(app: Hono<{ Bindings: Env }>, fixture: TestFixture, path = "/"): Promise<{
   id: string;
   code: string;
   internalId: string;
   script: string;
   contentType: string;
 }> {
-  const response = await app.request(path, {
-    method: "POST"
-  }, fixture.env, fixture.ctx);
+  const response = await app.request(path, {}, fixture.env, fixture.ctx);
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
   assert.equal(response.headers.get("X-Session-Internal-Id"), null);
@@ -198,12 +196,12 @@ class FakeSessionBridge {
   }
 
   private async send(body: string): Promise<Response> {
-    const payload = JSON.parse(body) as Partial<SessionMeta> & { body?: string; cwd?: string; timeoutSeconds?: number };
+    const payload = JSON.parse(body) as Partial<SessionMeta> & { body?: string; cwd?: string; timeout?: number };
     const command: BridgeCommand = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       body: payload.body || "",
       cwd: payload.cwd || "",
-      timeoutSeconds: payload.timeoutSeconds || 30
+      timeoutSeconds: payload.timeout || 30
     };
     return this.enqueue(command);
   }

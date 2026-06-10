@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "vitest";
 import { strict as assert } from "node:assert";
-import { powerShellBootstrapScript, shellBootstrapScript } from "../../src/agent/bootstrap";
 import { shellAgentScript } from "../../src/agent/shell";
 import { powerShellAgentScript } from "../../src/agent/powershell";
 import type { SessionMeta } from "../../src/domain/session";
@@ -110,30 +109,6 @@ test("generated PowerShell agent is relay-only", () => {
 
 test.skipIf(!powerShell)("generated PowerShell agent parses", async () => {
   await assertPowerShellParses(powerShell, powerShellAgentScript("https://soe.test", meta));
-}, 30_000);
-
-test.skipIf(unixShells.length === 0)("generated POSIX bootstrap is syntax-valid across available Unix shells", async () => {
-  const script = shellBootstrapScript("https://soe.test");
-  assert.match(script, /api\/sessions/);
-  assert.match(script, /sh "\$AGENT_FILE"/);
-  assert.match(script, /--connect-timeout 5 --max-time 20/);
-  assert.ok(!script.includes("SOE_NATIVE"));
-  assert.ok(!script.includes("SOE_AUTO_UPGRADE"));
-  assert.ok(!script.includes("SOE_WARM_NATIVE"));
-  assert.ok(!script.includes("soe-agent"));
-  for (const shell of unixShells) await assertShellSyntax(shell, script);
-});
-
-test.skipIf(!powerShell)("generated PowerShell bootstrap parses", async () => {
-  const script = powerShellBootstrapScript("https://soe.test");
-  assert.match(script, /api\/sessions\.ps1/);
-  assert.match(script, /-TimeoutSec 20/);
-  assert.match(script, /-File \$AgentPath/);
-  assert.ok(!script.includes("SOE_NATIVE"));
-  assert.ok(!script.includes("SOE_AUTO_UPGRADE"));
-  assert.ok(!script.includes("SOE_WARM_NATIVE"));
-  assert.ok(!script.includes("soe-agent"));
-  await assertPowerShellParses(powerShell, script);
 }, 30_000);
 
 async function assertShellSyntax(sh: string, script: string): Promise<void> {

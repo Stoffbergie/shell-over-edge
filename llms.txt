@@ -15,7 +15,7 @@ Shell Over Edge gives temporary shell access through a simple HTTPS relay.
 POSIX:
 
 ```sh
-curl -sS https://soe.stoff.dev/a | sh
+curl -sS https://soe.stoff.dev | sh
 ```
 
 PowerShell:
@@ -26,11 +26,9 @@ irm https://soe.stoff.dev/a.ps1 | iex
 
 ## API
 
-- `GET /a`: POSIX bootstrap.
-- `GET /a.ps1`: PowerShell bootstrap.
-- `POST /api/sessions`: POSIX relay agent script.
-- `POST /api/sessions.ps1`: PowerShell relay agent script.
-- `POST /api/sessions/<code>/send`: send a command.
+- `GET /`: POSIX agent script.
+- `GET /a.ps1`: PowerShell agent script.
+- `POST /api/sessions/<code>/send?timeout=30`: send a command.
 - `POST /api/sessions/<code>/end`: close the session.
 
 Raw command:
@@ -42,8 +40,8 @@ curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'pwd'
 Command with options:
 
 ```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send \
-  --data '{"body":"pwd","cwd":"/tmp","timeoutSeconds":30}'
+curl -sS -X POST 'https://soe.stoff.dev/api/sessions/<code>/send?timeout=30' \
+  --data '{"body":"pwd","cwd":"/tmp"}'
 ```
 
 End:
@@ -58,6 +56,7 @@ curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end
 - Do not invent session codes.
 - Do not call retired endpoints such as `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, or `/connect.sh`.
 - Do not expect JSON from `/send`; command output is plain text.
+- Put command timeout in the URL as `?timeout=30`, not in the JSON body.
 - Prefer raw command bodies unless `cwd` or timeout control is needed.
 - Keep commands explicit, scoped, and reversible.
 - Close sessions when done.

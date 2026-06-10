@@ -27,8 +27,6 @@ const internalSessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0
 const sessionCodePattern = /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
 
 export function registerSessionRoutes(app: SessionApp): void {
-  app.post("/api/sessions", (c) => createSession(c, "shell"));
-  app.post("/api/sessions.ps1", (c) => createSession(c, "powershell"));
   app.post("/api/sessions/:id/send", sendCommand);
   app.post("/api/sessions/:id/hello", agentHello);
   app.get("/api/sessions/:id/next", agentNext);
@@ -36,7 +34,7 @@ export function registerSessionRoutes(app: SessionApp): void {
   app.post("/api/sessions/:id/end", endSession);
 }
 
-async function createSession(c: SessionContext, kind: ScriptKind): Promise<Response> {
+export async function createSessionResponse(c: SessionContext, kind: ScriptKind): Promise<Response> {
   const now = Date.now();
   const id = crypto.randomUUID().toLowerCase();
   const code = await createSessionCode(c.env);
@@ -145,25 +143,28 @@ async function resolveSessionId(env: Env, id: string | undefined): Promise<strin
   return internalSessionIdPattern.test(sessionId) ? sessionId : "";
 }
 
-async function readCommandInput(request: Request): Promise<{ body: string; cwd: string; timeoutSeconds: number }> {
+async function readCommandInput(request: Request): Promise<{ body: string; cwd: string; timeout: number }> {
   const url = new URL(request.url);
   const raw = (await readLimitedText(request, maxCommandBytes)).trim();
-  const defaultTimeout = normalizeTimeout(url.searchParams.get("timeout") || request.headers.get("x-timeout-seconds") || defaultCommandTimeoutSeconds);
+  const timeout = normalizeTimeout(url.searchParams.get("timeout") || defaultCommandTimeoutSeconds);
   if (!raw.startsWith("{")) {
-    return { body: raw, cwd: "", timeoutSeconds: defaultTimeout };
+    return { body: raw, cwd: "", timeout };
   }
 
-  type CommandPayload = { body?: unknown; cwd?: unknown; timeoutSeconds?: unknown; timeout?: unknown };
+  type CommandPayload = { body?: unknown; cwd?: unknown; timeout?: unknown; timeoutSeconds?: unknown };
   let payload: CommandPayload;
   try {
     payload = JSON.parse(raw) as CommandPayload;
   } catch {
     throw new BadRequestError("Invalid JSON command payload");
   }
+  if (payload.timeout !== undefined || payload.timeoutSeconds !== undefined) {
+    throw new BadRequestError("Use ?timeout= for command timeout");
+  }
 
   return {
     body: cleanString(payload.body, maxCommandBytes).trim(),
     cwd: cleanString(payload.cwd, 500),
-    timeoutSeconds: normalizeTimeout(payload.timeoutSeconds ?? payload.timeout ?? defaultTimeout)
+    timeout
   };
 }

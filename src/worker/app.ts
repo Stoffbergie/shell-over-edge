@@ -1,9 +1,7 @@
 import { Hono } from "hono";
-import { powerShellBootstrapScript, shellBootstrapScript } from "../agent/bootstrap";
-import { terminalUsage } from "../agent/terminal-usage";
-import { PayloadTooLargeError, BadRequestError, publicBaseUrl, textResponse } from "../shared/http";
+import { PayloadTooLargeError, BadRequestError, textResponse } from "../shared/http";
 import type { Env } from "./env";
-import { registerSessionRoutes } from "./routes/sessions";
+import { createSessionResponse, registerSessionRoutes } from "./routes/sessions";
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -26,19 +24,8 @@ app.use("*", async (c, next) => {
   });
 });
 
-app.get("/", (c) => textResponse(terminalUsage(publicBaseUrl(c.req.raw, c.env))));
-app.get("/a", (c) => new Response(shellBootstrapScript(publicBaseUrl(c.req.raw, c.env)), {
-  headers: {
-    "Cache-Control": "no-store",
-    "Content-Type": "text/x-shellscript; charset=utf-8"
-  }
-}));
-app.get("/a.ps1", (c) => new Response(powerShellBootstrapScript(publicBaseUrl(c.req.raw, c.env)), {
-  headers: {
-    "Cache-Control": "no-store",
-    "Content-Type": "text/plain; charset=utf-8"
-  }
-}));
+app.get("/", (c) => createSessionResponse(c, "shell"));
+app.get("/a.ps1", (c) => createSessionResponse(c, "powershell"));
 
 registerSessionRoutes(app);
 

@@ -46,7 +46,7 @@ test("relay bridge handles a burst of parallel commands without timeouts or resu
 });
 
 async function createSession(baseUrl: string): Promise<{ id: string }> {
-  const response = await fetch(`${baseUrl}/api/sessions`, { method: "POST" });
+  const response = await fetch(baseUrl);
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
   assert.match(id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
@@ -55,9 +55,9 @@ async function createSession(baseUrl: string): Promise<{ id: string }> {
 }
 
 async function sendCommand(baseUrl: string, id: string, body: string): Promise<{ status: number; text: string }> {
-  const response = await fetch(`${baseUrl}/api/sessions/${id}/send`, {
+  const response = await fetch(`${baseUrl}/api/sessions/${id}/send?timeout=20`, {
     method: "POST",
-    body: JSON.stringify({ body, timeoutSeconds: 20 })
+    body: JSON.stringify({ body })
   });
   return { status: response.status, text: await response.text() };
 }

@@ -15,28 +15,18 @@ const json = args.has("json");
 const retryableDnsCodes = new Set(["ENOTFOUND", "EAI_AGAIN"]);
 
 const timings = {
-  root: [],
   bootstrap: [],
-  create: [],
   relay: []
 };
 const sizes = {};
 
 for (let index = 0; index < runs; index += 1) {
-  const root = await timed(() => request("/"));
-  timings.root.push(root.ms);
-  if (index === 0) sizes.root = root.result.bytes;
-
-  const bootstrap = await timed(() => request("/a"));
-  timings.bootstrap.push(bootstrap.ms);
-  if (index === 0) sizes.bootstrap = bootstrap.result.bytes;
-
   let id = "";
   try {
-    const session = await timed(() => request("/api/sessions", { method: "POST" }));
-    timings.create.push(session.ms);
-    if (index === 0) sizes.shellAgent = session.result.bytes;
-    id = session.result.headers["x-session-id"];
+    const bootstrap = await timed(() => request("/"));
+    timings.bootstrap.push(bootstrap.ms);
+    if (index === 0) sizes.bootstrap = bootstrap.result.bytes;
+    id = bootstrap.result.headers["x-session-id"];
     assertSessionCode(id);
 
     await request(`/api/sessions/${id}/hello`, { method: "POST", body: process.cwd() });
@@ -50,8 +40,9 @@ for (let index = 0; index < runs; index += 1) {
 
 const powerShell = await request("/a.ps1");
 sizes.powerShellBootstrap = powerShell.bytes;
+if (powerShell.headers["x-session-id"]) await endSession(powerShell.headers["x-session-id"]);
 
-const burstSession = await request("/api/sessions", { method: "POST" });
+const burstSession = await request("/");
 const burstId = burstSession.headers["x-session-id"];
 assertSessionCode(burstId);
 let burstResult;
@@ -83,9 +74,9 @@ if (json) {
 }
 
 async function relayCommand(sessionId, body) {
-  const send = request(`/api/sessions/${sessionId}/send`, {
+  const send = request(`/api/sessions/${sessionId}/send?timeout=10`, {
     method: "POST",
-    body: JSON.stringify({ body, timeoutSeconds: 10 })
+    body: JSON.stringify({ body })
   });
   const command = await nextCommand(sessionId);
   await request(`/api/sessions/${sessionId}/result/${command.id}?exit=0`, {
@@ -100,9 +91,9 @@ async function relayCommand(sessionId, body) {
 async function relayBurst(sessionId, count) {
   const sends = Array.from({ length: count }, (_, index) => {
     const body = `burst-${index}`;
-    return request(`/api/sessions/${sessionId}/send`, {
+    return request(`/api/sessions/${sessionId}/send?timeout=20`, {
       method: "POST",
-      body: JSON.stringify({ body, timeoutSeconds: 20 })
+      body: JSON.stringify({ body })
     }).then((response) => ({ body, response }));
   });
 

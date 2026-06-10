@@ -43,14 +43,14 @@ test.skipIf(!sh || !curl)("generated POSIX agent connects, runs a command, and r
   }
 });
 
-test.skipIf(!sh || !curl)("POSIX bootstrap starts the relay agent only", async () => {
+test.skipIf(!sh || !curl)("root POSIX agent starts and relays commands", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
   const dir = await mkdtemp(join(tmpdir(), "soe-posix-bootstrap-e2e-"));
   let agent: ReturnType<typeof spawn> | undefined;
   let output = () => "";
   try {
-    const script = await fetchText(`${server.baseUrl}/a`);
+    const script = await fetchText(server.baseUrl);
     assert.ok(!script.includes("SOE_NATIVE"));
     assert.ok(!script.includes("SOE_AUTO_UPGRADE"));
     assert.ok(!script.includes("SOE_WARM_NATIVE"));
@@ -156,7 +156,7 @@ test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell a
   let agent: ReturnType<typeof spawn> | undefined;
   let output = () => "";
   try {
-    const session = await createSession(server.baseUrl, "/api/sessions.ps1");
+    const session = await createSession(server.baseUrl, "/a.ps1");
     const scriptPath = join(dir, "agent.ps1");
     await writeFile(scriptPath, session.script);
     await mkdir(join(dir, "work"));
@@ -190,7 +190,7 @@ test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell a
   let agent: ReturnType<typeof spawn> | undefined;
   let output = () => "";
   try {
-    const session = await createSession(server.baseUrl, "/api/sessions.ps1");
+    const session = await createSession(server.baseUrl, "/a.ps1");
     const scriptPath = join(dir, "agent.ps1");
     await writeFile(scriptPath, session.script);
     await mkdir(join(dir, "work"));
@@ -224,8 +224,8 @@ test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell a
   }
 });
 
-async function createSession(baseUrl: string, path = "/api/sessions"): Promise<{ id: string; script: string }> {
-  const response = await fetch(`${baseUrl}${path}`, { method: "POST" });
+async function createSession(baseUrl: string, path = "/"): Promise<{ id: string; script: string }> {
+  const response = await fetch(`${baseUrl}${path}`);
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
   assert.match(id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
@@ -238,10 +238,10 @@ async function fetchText(url: string): Promise<string> {
   return response.text();
 }
 
-async function sendCommand(baseUrl: string, id: string, body: string, details = () => "", timeoutSeconds = 10): Promise<{ status: number; text: string }> {
-  const response = await fetch(`${baseUrl}/api/sessions/${id}/send`, {
+async function sendCommand(baseUrl: string, id: string, body: string, details = () => "", timeout = 10): Promise<{ status: number; text: string }> {
+  const response = await fetch(`${baseUrl}/api/sessions/${id}/send?timeout=${timeout}`, {
     method: "POST",
-    body: JSON.stringify({ body, timeoutSeconds })
+    body: JSON.stringify({ body })
   });
   const result = { status: response.status, text: await response.text() };
   assert.notEqual(result.status, 504, `${result.text}\n${details()}`);

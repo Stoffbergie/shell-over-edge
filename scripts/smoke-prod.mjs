@@ -87,53 +87,41 @@ function isSessionCode(value) {
 
 const root = await request("/");
 assert(root.response.ok, `GET / returned ${root.response.status}`);
-assert(root.text.includes("Shell Over Edge"), "GET / did not return Shell Over Edge usage");
-assert(root.text.includes("/api/sessions/<code>/send"), "GET / did not return send usage");
-assert(root.text.includes("/api/sessions/<code>/end"), "GET / did not return end usage");
-assert(root.text.includes(`${baseUrl}/a | sh`), "GET / did not return bootstrap usage");
-assert(!root.text.includes("/probe"), "GET / should not document probe");
-assert(!root.text.includes("/config"), "GET / should not document config");
-assert(!root.text.includes("WebRTC"), "GET / should not document WebRTC");
+assert(root.response.headers["content-type"] === "text/x-shellscript; charset=utf-8", "GET / did not return shell content type");
+const id = root.response.headers["x-session-id"];
+assert(isSessionCode(id), "session code header missing");
+assert(!root.response.headers["x-session-internal-id"], "session response leaked internal id");
+assert(root.text.startsWith("#!/bin/sh"), "session response is not a shell script");
+assert(root.text.includes(`/api/sessions/$SESSION_ID/next`), "shell script does not poll the session route");
+assert(root.text.includes("AGENT_VERSION='0.3.0'"), "shell script has wrong agent version");
+assert(!root.text.includes("download_native"), "shell script still contains native download");
+assert(!root.text.includes("download_webrtc"), "shell script still contains WebRTC download");
+assert(!root.text.includes("probe_json"), "shell script still contains probe control");
+assert(!root.text.includes("config_json"), "shell script still contains config control");
+assert(!root.text.includes("Authorization"), "shell script should not use authorization headers");
+assert(!root.text.includes("X-Agent-User"), "shell script should not send target user telemetry");
+assert(!root.text.includes("$(whoami)"), "shell script should not read target user");
+assert(!root.text.includes("--data-binary \"$(pwd)\""), "shell script should not send target cwd telemetry");
+assert(!root.text.includes("?token" + "="), "shell script leaks token in URL");
 
 const legacy = await request("/connect.sh");
 assert(legacy.response.status === 404, `legacy connect.sh should be disabled, got ${legacy.response.status}`);
 
 const bootstrap = await request("/a");
-assert(bootstrap.response.ok, `GET /a returned ${bootstrap.response.status}: ${bootstrap.text}`);
-assert(bootstrap.text.includes("sh \"$AGENT_FILE\""), "POSIX bootstrap does not run the relay agent");
-assert(!bootstrap.text.includes("SOE_NATIVE"), "POSIX bootstrap still includes native path");
-assert(!bootstrap.text.includes("SOE_AUTO_UPGRADE"), "POSIX bootstrap still includes auto-upgrade path");
-
-const psBootstrap = await request("/a.ps1");
-assert(psBootstrap.response.ok, `GET /a.ps1 returned ${psBootstrap.response.status}: ${psBootstrap.text}`);
-assert(psBootstrap.text.includes("api/sessions.ps1"), "PowerShell bootstrap does not fetch the relay agent");
-assert(!psBootstrap.text.includes("SOE_NATIVE"), "PowerShell bootstrap still includes native path");
+assert(bootstrap.response.status === 404, `retired /a should be disabled, got ${bootstrap.response.status}`);
 
 const session = await request("/api/sessions", {
   method: "POST"
 });
-assert(session.response.ok, `POST /api/sessions returned ${session.response.status}: ${session.text}`);
+assert(session.response.status === 404, `retired POST /api/sessions should be disabled, got ${session.response.status}`);
 
-const id = session.response.headers["x-session-id"];
-assert(isSessionCode(id), "session code header missing");
-assert(!session.response.headers["x-session-internal-id"], "session response leaked internal id");
-assert(session.text.startsWith("#!/bin/sh"), "session response is not a shell script");
-assert(session.text.includes(`/api/sessions/$SESSION_ID/next`), "shell script does not poll the session route");
-assert(session.text.includes("AGENT_VERSION='0.3.0'"), "shell script has wrong agent version");
-assert(!session.text.includes("download_native"), "shell script still contains native download");
-assert(!session.text.includes("download_webrtc"), "shell script still contains WebRTC download");
-assert(!session.text.includes("probe_json"), "shell script still contains probe control");
-assert(!session.text.includes("config_json"), "shell script still contains config control");
-assert(!session.text.includes("Authorization"), "shell script should not use authorization headers");
-assert(!session.text.includes("X-Agent-User"), "shell script should not send target user telemetry");
-assert(!session.text.includes("$(whoami)"), "shell script should not read target user");
-assert(!session.text.includes("--data-binary \"$(pwd)\""), "shell script should not send target cwd telemetry");
-assert(!session.text.includes("?token" + "="), "shell script leaks token in URL");
-
-const powerShell = await request("/api/sessions.ps1", {
+const powerShellSession = await request("/api/sessions.ps1", {
   method: "POST"
 });
-assert(powerShell.response.ok, `POST /api/sessions.ps1 returned ${powerShell.response.status}: ${powerShell.text}`);
+assert(powerShellSession.response.status === 404, `retired POST /api/sessions.ps1 should be disabled, got ${powerShellSession.response.status}`);
+
+const powerShell = await request("/a.ps1");
+assert(powerShell.response.ok, `GET /a.ps1 returned ${powerShell.response.status}: ${powerShell.text}`);
 const powerShellId = powerShell.response.headers["x-session-id"];
 assert(isSessionCode(powerShellId), "PowerShell session code header missing");
 assert(!powerShell.response.headers["x-session-internal-id"], "PowerShell session response leaked internal id");
@@ -168,9 +156,16 @@ for (const removed of ["/probe", "/config", "/ice", "/signals"]) {
   assert(removedRoute.response.status === 404, `${removed} should be removed, got ${removedRoute.response.status}`);
 }
 
-const send = request(`/api/sessions/${id}/send`, {
+const bodyTimeout = await request(`/api/sessions/${id}/send`, {
   method: "POST",
   body: '{"body":"printf smoke-prod","timeoutSeconds":10}'
+});
+assert(bodyTimeout.response.status === 400, `body timeout should be rejected, got ${bodyTimeout.response.status}`);
+assert(bodyTimeout.text === "Use ?timeout= for command timeout\n", "body timeout error payload is wrong");
+
+const send = request(`/api/sessions/${id}/send?timeout=10`, {
+  method: "POST",
+  body: '{"body":"printf smoke-prod"}'
 });
 
 const next = await request(`/api/sessions/${id}/next`);

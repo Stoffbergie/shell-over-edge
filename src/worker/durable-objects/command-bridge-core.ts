@@ -13,7 +13,7 @@ type BridgeCommand = {
 type CommandPayload = {
   body?: unknown;
   cwd?: unknown;
-  timeoutSeconds?: unknown;
+  timeout?: unknown;
 };
 
 type ResponseWaiter = {
@@ -52,7 +52,7 @@ export class CommandBridgeCore {
       id: randomId(),
       body,
       cwd: cleanString(payload.cwd, 500),
-      timeoutSeconds: normalizeTimeout(payload.timeoutSeconds ?? defaultCommandTimeoutSeconds)
+      timeoutSeconds: normalizeTimeout(payload.timeout ?? defaultCommandTimeoutSeconds)
     };
 
     return this.enqueueCommand(command);
@@ -71,7 +71,7 @@ export class CommandBridgeCore {
     });
 
     this.dispatch(command);
-    logInfo("command_sent", { commandId: command.id, bytes: command.body.length, timeoutSeconds: command.timeoutSeconds });
+    logInfo("command_sent", { commandId: command.id, bytes: command.body.length, timeout: command.timeoutSeconds });
     return response;
   }
 
