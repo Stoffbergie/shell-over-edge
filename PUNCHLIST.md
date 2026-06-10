@@ -31,3 +31,7 @@ No open items.
 - [x] P3: Make the package scripts read like a production Worker.
   - Fixed: `pnpm run build` now typechecks and runs the Cloudflare Worker dry-run bundle. Root terminal usage now includes the close-session command.
   - Proof: `pnpm run validate`; `pnpm run build`; local `pnpm run dev` plus root output grep for bootstrap, send, and end commands.
+
+- [x] P0: Fix fresh-clone install failure from unnecessary `sharp` build approval.
+  - Fixed: set `sharp: false` in `pnpm-workspace.yaml` so pnpm explicitly skips the unused transitive postinstall instead of trying to compile it or failing as unapproved.
+  - Proof: temp copy without `node_modules` ran `corepack enable`, `pnpm install --frozen-lockfile`, `pnpm run validate`, `pnpm run build`, and local `pnpm run dev` plus root output grep for bootstrap, send, and end commands.
