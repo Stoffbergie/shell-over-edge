@@ -1,10 +1,15 @@
 import type { SessionMeta } from "../domain/session";
+import { agentProtocolVersion, nativeReleaseBaseUrl } from "../shared/config";
 import { quotePowerShell } from "../shared/strings";
 
 export function powerShellAgentScript(baseUrl: string, meta: SessionMeta): string {
   return `$ErrorActionPreference = "Stop"
 $BaseUrl = ${quotePowerShell(baseUrl)}
 $SessionId = ${quotePowerShell(meta.code)}
+$AgentVersion = ${quotePowerShell(agentProtocolVersion)}
+$NativeBaseUrl = if ($env:SOE_NATIVE_BASE_URL) { $env:SOE_NATIVE_BASE_URL } else { ${quotePowerShell(nativeReleaseBaseUrl)} }
+$NativePath = Join-Path ([IO.Path]::GetTempPath()) "soe-agent-$SessionId"
+$UpgradeToNative = $false
 $PlatformName = if ($PSVersionTable.Platform) { [string]$PSVersionTable.Platform } else { [string][Environment]::OSVersion.Platform }
 $Headers = @{
   "X-Agent-Platform" = $PlatformName
@@ -148,6 +153,141 @@ function Run-Command([string]$CommandBody, [string]$Cwd, [string]$ResultFile, [i
   }
 }
 
+function Test-AgentCommand([string]$Name) {
+  return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Get-NativeName {
+  $Architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+  if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)) {
+    if ($Architecture -eq "arm64") { return "soe-agent-aarch64-windows.exe" }
+    if ($Architecture -eq "x64") { return "soe-agent-x86_64-windows.exe" }
+  }
+  if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::OSX)) {
+    if ($Architecture -eq "arm64") { return "soe-agent-aarch64-macos" }
+    if ($Architecture -eq "x64") { return "soe-agent-x86_64-macos" }
+  }
+  if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Linux)) {
+    if ($Architecture -eq "arm64") { return "soe-agent-aarch64-linux-musl" }
+    if ($Architecture -eq "x64") { return "soe-agent-x86_64-linux-musl" }
+  }
+  return ""
+}
+
+function Start-NativeDownload {
+  $Name = Get-NativeName
+  if (!$Name -and !$env:SOE_NATIVE_URL) { return $false }
+  $Url = if ($env:SOE_NATIVE_URL) { $env:SOE_NATIVE_URL } else { "$NativeBaseUrl/$Name" }
+  try {
+    Invoke-WebRequest -Uri $Url -OutFile "$NativePath.tmp" -UseBasicParsing -TimeoutSec 40
+    Move-Item "$NativePath.tmp" $NativePath -Force
+    if (![Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)) {
+      & chmod +x $NativePath 2>$null
+    }
+    return Test-Path -LiteralPath $NativePath -PathType Leaf
+  } catch {
+    return $false
+  }
+}
+
+function Get-BaseUrlLatencyMs {
+  try {
+    $Watch = [Diagnostics.Stopwatch]::StartNew()
+    Invoke-AgentRequest -Method Get -Path "/a" | Out-Null
+    $Watch.Stop()
+    return [int]$Watch.Elapsed.TotalMilliseconds
+  } catch {
+    return $null
+  }
+}
+
+function Get-PrivateIps {
+  try {
+    return @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } | Select-Object -ExpandProperty IPAddress) -join ","
+  } catch {
+    try {
+      return @([Net.Dns]::GetHostAddresses([Net.Dns]::GetHostName()) | Where-Object { $_.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and $_.ToString() -notlike "127.*" } | ForEach-Object { $_.ToString() }) -join ","
+    } catch {
+      return ""
+    }
+  }
+}
+
+function Get-ProbeJson {
+  $NativeSupported = ![string]::IsNullOrWhiteSpace((Get-NativeName))
+  $Payload = [ordered]@{
+    session = $SessionId
+    agent = [ordered]@{ kind = "powershell"; version = $AgentVersion; pid = $PID }
+    os = [ordered]@{
+      name = [Runtime.InteropServices.RuntimeInformation]::OSDescription
+      version = [Environment]::OSVersion.VersionString
+      arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    }
+    hardware = [ordered]@{
+      cpu = try { (Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Name) } catch { "" }
+      cores = [Environment]::ProcessorCount
+      memoryBytes = try { (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory } catch { $null }
+    }
+    runtime = [ordered]@{
+      shell = "powershell"
+      cwd = (Get-Location).Path
+      user = [Environment]::UserName
+      hostname = [Environment]::MachineName
+      commands = [ordered]@{
+        curl = Test-AgentCommand "curl"
+        powershell = $true
+        pwsh = Test-AgentCommand "pwsh"
+        python3 = Test-AgentCommand "python3"
+        node = Test-AgentCommand "node"
+        bun = Test-AgentCommand "bun"
+      }
+    }
+    network = [ordered]@{
+      baseUrl = $BaseUrl
+      baseUrlLatencyMs = Get-BaseUrlLatencyMs
+      privateIps = Get-PrivateIps
+    }
+    supports = [ordered]@{
+      relay = $true
+      native = $NativeSupported
+      directHttp = $false
+      webrtc = $false
+      webrtcSignaling = $true
+    }
+    activeTransport = "relay"
+  }
+  return ($Payload | ConvertTo-Json -Depth 8 -Compress)
+}
+
+function Get-ConfigJson([string]$Requested) {
+  $Mode = if ([string]::IsNullOrWhiteSpace($Requested)) { "auto" } else { $Requested.Trim().ToLowerInvariant() }
+  if ($Mode -eq "auto" -or $Mode -eq "native") {
+    if (Start-NativeDownload) {
+      $script:UpgradeToNative = $true
+      return (@{ ok = $true; requested = $Mode; active = "native"; upgraded = $true; fallback = $false; reason = "native agent downloaded and will take over after this response" } | ConvertTo-Json -Compress)
+    }
+    return (@{ ok = $true; requested = $Mode; active = "relay"; upgraded = $false; fallback = $true; reason = "native agent is not available on this machine" } | ConvertTo-Json -Compress)
+  }
+  if ($Mode -eq "relay") {
+    return (@{ ok = $true; requested = "relay"; active = "relay"; upgraded = $false; fallback = $false; reason = "relay is already active" } | ConvertTo-Json -Compress)
+  }
+  if ($Mode -eq "direct") {
+    if (Start-NativeDownload) {
+      $script:UpgradeToNative = $true
+      return (@{ ok = $true; requested = "direct"; active = "native"; upgraded = $true; fallback = $true; reason = "native driver downloaded; direct HTTP listener is not enabled yet" } | ConvertTo-Json -Compress)
+    }
+    return (@{ ok = $true; requested = "direct"; active = "relay"; upgraded = $false; fallback = $true; reason = "this PowerShell agent does not run a direct HTTP listener yet" } | ConvertTo-Json -Compress)
+  }
+  if ($Mode -eq "webrtc") {
+    if (Start-NativeDownload) {
+      $script:UpgradeToNative = $true
+      return (@{ ok = $true; requested = "webrtc"; active = "native"; upgraded = $true; fallback = $true; reason = "native driver downloaded; WebRTC is not enabled in this driver yet" } | ConvertTo-Json -Compress)
+    }
+    return (@{ ok = $true; requested = "webrtc"; active = "relay"; upgraded = $false; fallback = $true; reason = "WebRTC needs a sender-side driver and an agent runtime with WebRTC support; this PowerShell agent only has signaling support" } | ConvertTo-Json -Compress)
+  }
+  return (@{ ok = $false; requested = $Mode; active = "relay"; upgraded = $false; fallback = $true; reason = "unsupported transport" } | ConvertTo-Json -Compress)
+}
+
 Write-Host "Session: $SessionId ($Clipboard)"
 Write-Host "Stop anytime: Ctrl+C"
 
@@ -174,12 +314,31 @@ try {
       continue
     }
     $CommandId = Get-ResponseHeader $Response "X-Command-Id"
+    $CommandType = Get-ResponseHeader $Response "X-Command-Type"
+    if ([string]::IsNullOrWhiteSpace($CommandType)) { $CommandType = "shell" }
     $Cwd = Decode-Base64Text (Get-ResponseHeader $Response "X-Command-Cwd-Base64")
     $TimeoutSeconds = [int](Get-ResponseHeader $Response "X-Command-Timeout")
     if ($TimeoutSeconds -lt 1) { $TimeoutSeconds = 900 }
-    $ExitCode = Run-Command -CommandBody (Get-Content $BodyFile -Raw) -Cwd $Cwd -ResultFile $ResultFile -TimeoutSeconds $TimeoutSeconds
+    $CommandBody = Get-Content $BodyFile -Raw
+    if ($CommandType -eq "shell") {
+      $ExitCode = Run-Command -CommandBody $CommandBody -Cwd $Cwd -ResultFile $ResultFile -TimeoutSeconds $TimeoutSeconds
+    } elseif ($CommandType -eq "probe") {
+      [IO.File]::WriteAllText($ResultFile, (Get-ProbeJson))
+      $ExitCode = 0
+    } elseif ($CommandType -eq "config") {
+      [IO.File]::WriteAllText($ResultFile, (Get-ConfigJson $CommandBody))
+      $ExitCode = 0
+    } else {
+      [IO.File]::WriteAllText($ResultFile, (@{ ok = $false; reason = "unsupported command type" } | ConvertTo-Json -Compress))
+      $ExitCode = 1
+    }
     Invoke-AgentRequest -Method Post -Path "/api/sessions/$SessionId/result/\${CommandId}?exit=$ExitCode" -Body ([IO.File]::ReadAllBytes($ResultFile)) -ContentType "application/octet-stream" | Out-Null
     Remove-Item $BodyFile, $ResultFile -Force
+    if ($UpgradeToNative -and (Test-Path -LiteralPath $NativePath -PathType Leaf)) {
+      $env:SOE_NO_END_ON_EXIT = "1"
+      & $NativePath --base-url $BaseUrl --session $SessionId
+      break
+    }
   }
 } finally {
   Send-Bye

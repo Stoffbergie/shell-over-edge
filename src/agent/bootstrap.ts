@@ -1,6 +1,5 @@
 import { quotePowerShell, quoteShell } from "../shared/strings";
-
-const nativeReleaseBaseUrl = "https://github.com/Stoffberg/shell-over-edge/releases/latest/download";
+import { nativeReleaseBaseUrl } from "../shared/config";
 
 export function shellBootstrapScript(baseUrl: string): string {
   return `#!/bin/sh

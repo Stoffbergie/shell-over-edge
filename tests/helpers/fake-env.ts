@@ -22,13 +22,14 @@ export type TestFixture = {
 
 type BridgeCommand = {
   id: string;
-  type: "shell";
+  type: "shell" | "probe" | "config";
   body: string;
   cwd: string;
   timeoutSeconds: number;
 };
 
 type BridgeWaiter = {
+  type?: BridgeCommand["type"];
   resolve: (response: Response) => void;
   queueTimer?: ReturnType<typeof setTimeout>;
   resultTimer?: ReturnType<typeof setTimeout>;
@@ -189,6 +190,8 @@ class FakeSessionBridge {
     const method = init.method || "GET";
     const body = await requestBody(init.body);
     if (url.pathname === "/send") return this.send(body);
+    if (url.pathname === "/probe") return this.control("probe", "", 15);
+    if (url.pathname === "/config") return this.control("config", body, 60);
     if (url.pathname === "/next") return this.next();
     if (url.pathname.startsWith("/result/")) return this.result(url.pathname.slice("/result/".length), url.searchParams.get("exit"), body);
     if (url.pathname === "/signals" && method === "POST") return this.publishSignal(body);
@@ -206,6 +209,20 @@ class FakeSessionBridge {
       cwd: payload.cwd || "",
       timeoutSeconds: payload.timeoutSeconds || 30
     };
+    return this.enqueue(command);
+  }
+
+  private control(type: "probe" | "config", body: string, timeoutSeconds: number): Promise<Response> {
+    return this.enqueue({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      type,
+      body,
+      cwd: "",
+      timeoutSeconds
+    });
+  }
+
+  private enqueue(command: BridgeCommand): Promise<Response> {
     const response = new Promise<Response>((resolve) => {
       const queueTimer = setTimeout(() => {
         this.resultWaiters.delete(command.id);
@@ -213,7 +230,7 @@ class FakeSessionBridge {
         this.rememberCommand(command.id);
         resolve(new Response("Timed out waiting for command result\n", { status: 504 }));
       }, fakeMaxSendWaitMs);
-      this.resultWaiters.set(command.id, { resolve, queueTimer });
+      this.resultWaiters.set(command.id, { type: command.type, resolve, queueTimer });
     });
     this.dispatch(command);
     return response;
@@ -252,8 +269,9 @@ class FakeSessionBridge {
       status: exitCode === 0 ? 200 : 500,
       headers: {
         "Cache-Control": "no-store",
-        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Type": waiter.type === "probe" || waiter.type === "config" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8",
         "X-Command-Id": commandId,
+        "X-Command-Type": waiter.type || "shell",
         "X-Exit-Code": String(exitCode)
       }
     }));

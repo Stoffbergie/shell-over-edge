@@ -156,6 +156,47 @@ test.skipIf(!sh || !curl)("POSIX bootstrap does not download native assets by de
   }
 });
 
+test.skipIf(process.platform === "win32" || !sh || !curl)("generated POSIX agent downloads native driver on config request", async () => {
+  const fixture = createTestEnv();
+  const server = await startAppServer(app, fixture);
+  const native = await startNativeAssetServer();
+  const dir = await mkdtemp(join(tmpdir(), "soe-posix-config-native-"));
+  let agent: ReturnType<typeof spawn> | undefined;
+  let output = () => "";
+  try {
+    const session = await createSession(server.baseUrl);
+    const scriptPath = join(dir, "agent.sh");
+    await writeFile(scriptPath, session.script, { mode: 0o700 });
+    agent = spawn(sh, [scriptPath], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        SOE_NATIVE_URL: native.url,
+        NO_PROXY: "127.0.0.1,localhost",
+        no_proxy: "127.0.0.1,localhost"
+      }
+    });
+    output = captureOutput(agent);
+
+    const config = await controlRequest(server.baseUrl, session.id, "config", "native", diagnostics(output, server));
+    assert.equal(config.status, 200);
+    const payload = JSON.parse(config.text) as { requested: string; active: string; upgraded: boolean; fallback: boolean };
+    assert.equal(payload.requested, "native");
+    assert.equal(payload.active, "native");
+    assert.equal(payload.upgraded, true);
+    assert.equal(payload.fallback, false);
+    assert.ok(native.requests.length > 0);
+
+    await waitForExit(agent, 10_000, output);
+    assert.match(output(), /fake-native --base-url /);
+  } finally {
+    if (agent && agent.exitCode === null) agent.kill();
+    await native.close();
+    await removeDir(dir);
+    await server.close();
+  }
+});
+
 test.skipIf(!sh || !curl)("generated POSIX agent script drains parallel relay sends without result mixups", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
@@ -322,6 +363,16 @@ async function sendCommand(baseUrl: string, id: string, body: string, details = 
   return result;
 }
 
+async function controlRequest(baseUrl: string, id: string, name: "probe" | "config", body: string, details = () => ""): Promise<{ status: number; text: string }> {
+  const response = await fetch(`${baseUrl}/api/sessions/${id}/${name}`, {
+    method: name === "probe" ? "GET" : "POST",
+    body: name === "probe" ? undefined : body
+  });
+  const result = { status: response.status, text: await response.text() };
+  assert.notEqual(result.status, 504, `${result.text}\n${details()}`);
+  return result;
+}
+
 async function endSession(baseUrl: string, id: string): Promise<void> {
   const response = await fetch(`${baseUrl}/api/sessions/${id}/end`, { method: "POST" });
   assert.equal(response.status, 200);
@@ -359,6 +410,35 @@ type HangingServer = {
   requests: string[];
   url: string;
 };
+
+type NativeAssetServer = {
+  close: () => Promise<void>;
+  requests: string[];
+  url: string;
+};
+
+async function startNativeAssetServer(): Promise<NativeAssetServer> {
+  const requests: string[] = [];
+  const body = "#!/bin/sh\nprintf 'fake-native %s\\n' \"$*\"\n";
+  const server = createServer((request, response) => {
+    requests.push(request.url || "/");
+    response.writeHead(200, {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": Buffer.byteLength(body)
+    });
+    response.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Could not start native asset server");
+  return {
+    close: async () => {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    },
+    requests,
+    url: `http://127.0.0.1:${address.port}/soe-agent`
+  };
+}
 
 async function startHangingServer(): Promise<HangingServer> {
   const requests: string[] = [];

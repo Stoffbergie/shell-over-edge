@@ -44,6 +44,46 @@ test.skipIf(skipNative)("native agent connects and streams a command through the
   }
 });
 
+test.skipIf(skipNative)("native agent answers probe and config control commands", async () => {
+  const fixture = createTestEnv();
+  const server = await startAppServer(app, fixture);
+  const dir = await mkdtemp(join(tmpdir(), "soe-native-control-"));
+  let agent: ReturnType<typeof spawn> | undefined;
+  let output = () => "";
+  try {
+    const session = await createSession(server.baseUrl);
+    agent = spawn(nativeAgent, ["--base-url", server.baseUrl, "--session", session.id], {
+      cwd: dir,
+      env: noProxyEnv()
+    });
+    output = captureOutput(agent);
+
+    await waitForHello(server, agent, output, 10_000);
+
+    const probe = await controlRequest(server.baseUrl, session.id, "probe", "", diagnostics(output, server));
+    assert.equal(probe.status, 200);
+    const probePayload = JSON.parse(probe.text) as { agent: { kind: string }; activeTransport: string; supports: { native: boolean; webrtcSignaling: boolean } };
+    assert.equal(probePayload.agent.kind, "native");
+    assert.equal(probePayload.activeTransport, "native");
+    assert.equal(probePayload.supports.native, true);
+    assert.equal(probePayload.supports.webrtcSignaling, true);
+
+    const config = await controlRequest(server.baseUrl, session.id, "config", "webrtc", diagnostics(output, server));
+    assert.equal(config.status, 200);
+    const configPayload = JSON.parse(config.text) as { requested: string; active: string; fallback: boolean };
+    assert.equal(configPayload.requested, "webrtc");
+    assert.equal(configPayload.active, "native");
+    assert.equal(configPayload.fallback, true);
+
+    await endSession(server.baseUrl, session.id);
+    await waitForExit(agent, 10_000, output);
+  } finally {
+    if (agent && agent.exitCode === null) agent.kill();
+    await rm(dir, { force: true, recursive: true });
+    await server.close();
+  }
+});
+
 test.skipIf(skipNative)("native agent drains parallel relay sends without result mixups", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
@@ -130,6 +170,16 @@ async function sendCommand(baseUrl: string, id: string, body: string, details = 
   const response = await fetch(`${baseUrl}/api/sessions/${id}/send`, {
     method: "POST",
     body: JSON.stringify({ body, timeoutSeconds })
+  });
+  const result = { status: response.status, text: await response.text() };
+  assert.notEqual(result.status, 504, `${result.text}\n${details()}`);
+  return result;
+}
+
+async function controlRequest(baseUrl: string, id: string, name: "probe" | "config", body: string, details = () => ""): Promise<{ status: number; text: string }> {
+  const response = await fetch(`${baseUrl}/api/sessions/${id}/${name}`, {
+    method: name === "probe" ? "GET" : "POST",
+    body: name === "probe" ? undefined : body
   });
   const result = { status: response.status, text: await response.text() };
   assert.notEqual(result.status, 504, `${result.text}\n${details()}`);
