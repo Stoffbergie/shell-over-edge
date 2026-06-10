@@ -20,6 +20,7 @@ export type HttpDirectSignal = DirectSignal & {
 
 export type WebRtcSignalData = {
   kind: WebRtcSignalKind;
+  connectionId?: string;
   sdp?: string;
   candidate?: string;
   sdpMid?: string;
@@ -107,15 +108,15 @@ export function normalizeWebRtcSignalData(value: unknown): WebRtcSignalData | un
   if (!isRecord(value)) return undefined;
   if (value.type === "offer" || value.type === "answer") {
     const sdp = cleanSignalString(value.sdp, 24 * 1024);
-    return sdp ? { kind: value.type, sdp } : undefined;
+    return sdp ? withConnectionId({ kind: value.type, sdp }, value.connectionId) : undefined;
   }
   if (value.kind === "offer" || value.kind === "answer") {
     const sdp = cleanSignalString(value.sdp, 24 * 1024);
-    return sdp ? { kind: value.kind, sdp } : undefined;
+    return sdp ? withConnectionId({ kind: value.kind, sdp }, value.connectionId) : undefined;
   }
   const candidate = cleanSignalString(value.candidate, 4 * 1024);
   if (!candidate) return undefined;
-  const data: WebRtcSignalData = { kind: "candidate", candidate };
+  const data = withConnectionId({ kind: "candidate", candidate }, value.connectionId);
   const sdpMid = cleanSignalString(value.sdpMid, 120);
   if (sdpMid) data.sdpMid = sdpMid;
   const sdpMLineIndex = Number(value.sdpMLineIndex);
@@ -161,6 +162,11 @@ function cleanIceUrl(value: unknown): string {
 
 function cleanSignalString(value: unknown, maxLength: number): string {
   return typeof value === "string" ? value.slice(0, maxLength) : "";
+}
+
+function withConnectionId(data: WebRtcSignalData, value: unknown): WebRtcSignalData {
+  const connectionId = cleanSignalString(value, 120);
+  return connectionId ? { ...data, connectionId } : data;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

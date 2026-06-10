@@ -23,8 +23,8 @@ const targets = [
   },
   {
     name: "Debian 12 dash",
-    image: "debian:12-slim",
-    command: "apt-get update -qq >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates >/dev/null && /bin/sh /work/agent.sh"
+    image: "buildpack-deps:bookworm-curl",
+    command: "/bin/sh /work/agent.sh"
   },
   {
     name: "Ubuntu 22.04 sh",
