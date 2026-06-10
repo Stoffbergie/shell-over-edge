@@ -6,24 +6,25 @@ Temporary shell access over HTTPS.
 
 - Ask the user to start an agent on the target.
 - POSIX: `curl -sS https://soe.stoff.dev | sh`
-- PowerShell: `irm https://soe.stoff.dev/a.ps1 | iex`
+- PowerShell: `irm https://soe.stoff.dev | iex`
 - Use the printed 8-character code.
-- Send raw: `curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'pwd'`
-- Send with cwd/timeout: `curl -sS -X POST 'https://soe.stoff.dev/api/sessions/<code>/send?timeout=30' --data '{"body":"pwd","cwd":"/tmp"}'`
+- Send raw: `curl -sS -X POST https://soe.stoff.dev/<code>/send --data 'pwd'`
+- Send with cwd: `curl -sS -X POST https://soe.stoff.dev/<code>/send --data '{"body":"pwd","cwd":"/tmp"}'`
+- Add `?timeout=10` only for a custom timeout.
 - Read successful `/send` responses as plain text.
-- End: `curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end`
+- End: `curl -sS -X POST https://soe.stoff.dev/<code>/end`
 
 ## API
 
-- `GET /`: POSIX agent script.
-- `GET /a.ps1`: PowerShell agent script.
-- `POST /api/sessions/<code>/send?timeout=30`: send one command; body is raw text or `{"body":"pwd","cwd":"/tmp"}`.
-- `POST /api/sessions/<code>/end`: close the session.
+- `GET /`: POSIX agent by default, PowerShell when `User-Agent` or `Accept` contains `PowerShell` or `pwsh`.
+- `POST /<code>/send`: send one command; body is raw text or `{"body":"pwd","cwd":"/tmp"}`.
+- `POST /<code>/send?timeout=10`: send one command with a custom timeout.
+- `POST /<code>/end`: close the session.
 
 ## Rules
 
 - No bearer tokens, URL tokens, or invented codes.
-- Timeout belongs in `?timeout=30`; JSON only supports `body` and `cwd`.
+- Default timeout is 30 seconds. Custom timeout belongs in `?timeout=10`; JSON only supports `body` and `cwd`.
 - Do not call retired endpoints: `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, `/connect.sh`.
 - Keep commands explicit and reversible. Close sessions with `/end`.
 

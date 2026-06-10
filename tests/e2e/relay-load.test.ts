@@ -55,7 +55,7 @@ async function createSession(baseUrl: string): Promise<{ id: string }> {
 }
 
 async function sendCommand(baseUrl: string, id: string, body: string): Promise<{ status: number; text: string }> {
-  const response = await fetch(`${baseUrl}/api/sessions/${id}/send?timeout=20`, {
+  const response = await fetch(`${baseUrl}/${id}/send?timeout=20`, {
     method: "POST",
     body: JSON.stringify({ body })
   });

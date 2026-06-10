@@ -71,7 +71,7 @@ async function createSession(baseUrl: string): Promise<{ id: string; script: str
 }
 
 async function sendCommand(baseUrl: string, id: string, body: string, details = () => ""): Promise<{ status: number; text: string }> {
-  const response = await fetch(`${baseUrl}/api/sessions/${id}/send?timeout=10`, {
+  const response = await fetch(`${baseUrl}/${id}/send?timeout=10`, {
     method: "POST",
     body: JSON.stringify({ body })
   });
@@ -81,7 +81,7 @@ async function sendCommand(baseUrl: string, id: string, body: string, details = 
 }
 
 async function endSession(baseUrl: string, id: string): Promise<void> {
-  const response = await fetch(`${baseUrl}/api/sessions/${id}/end`, { method: "POST" });
+  const response = await fetch(`${baseUrl}/${id}/end`, { method: "POST" });
   assert.equal(response.status, 200);
 }
 

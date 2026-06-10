@@ -38,7 +38,11 @@ for (let index = 0; index < runs; index += 1) {
   }
 }
 
-const powerShell = await request("/a.ps1");
+const powerShell = await request("/", {
+  headers: {
+    "User-Agent": "PowerShell/7.5.0"
+  }
+});
 sizes.powerShellBootstrap = powerShell.bytes;
 if (powerShell.headers["x-session-id"]) await endSession(powerShell.headers["x-session-id"]);
 
@@ -74,7 +78,7 @@ if (json) {
 }
 
 async function relayCommand(sessionId, body) {
-  const send = request(`/api/sessions/${sessionId}/send?timeout=10`, {
+  const send = request(`/${sessionId}/send`, {
     method: "POST",
     body: JSON.stringify({ body })
   });
@@ -91,7 +95,7 @@ async function relayCommand(sessionId, body) {
 async function relayBurst(sessionId, count) {
   const sends = Array.from({ length: count }, (_, index) => {
     const body = `burst-${index}`;
-    return request(`/api/sessions/${sessionId}/send?timeout=20`, {
+    return request(`/${sessionId}/send?timeout=20`, {
       method: "POST",
       body: JSON.stringify({ body })
     }).then((response) => ({ body, response }));
@@ -129,7 +133,7 @@ async function nextCommand(sessionId) {
 }
 
 async function endSession(sessionId) {
-  await request(`/api/sessions/${sessionId}/end`, { method: "POST" }).catch(() => undefined);
+  await request(`/${sessionId}/end`, { method: "POST" }).catch(() => undefined);
 }
 
 async function timed(fn) {

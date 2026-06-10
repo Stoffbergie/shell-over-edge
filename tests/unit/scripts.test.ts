@@ -40,7 +40,7 @@ test("generated shell agent is relay-only and portable", () => {
   assert.match(script, /api\/sessions\/\$SESSION_ID\/hello/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/next/);
   assert.match(script, /api\/sessions\/\$SESSION_ID\/result\/\$command_id\?exit=\$exit_code/);
-  assert.match(script, /api\/sessions\/\$SESSION_ID\/end/);
+  assert.match(script, /\/\$SESSION_ID\/end/);
   assert.ok(!script.includes("Shell Over Edge\\n"));
   assert.ok(!script.includes("Expires:"));
   assert.ok(!script.includes("Send command:"));
@@ -87,7 +87,7 @@ test("generated PowerShell agent is relay-only", () => {
   assert.match(script, /api\/sessions\/\$SessionId\/hello/);
   assert.match(script, /api\/sessions\/\$SessionId\/next/);
   assert.match(script, /api\/sessions\/\$SessionId\/result\/\$\{CommandId\}\?exit=\$ExitCode/);
-  assert.match(script, /api\/sessions\/\$SessionId\/end/);
+  assert.match(script, /\/\$SessionId\/end/);
   assert.ok(!script.includes('Write-Host "Shell Over Edge"'));
   assert.ok(!script.includes('Write-Host "Expires:'));
   assert.ok(!script.includes('Write-Host "Send command:"'));

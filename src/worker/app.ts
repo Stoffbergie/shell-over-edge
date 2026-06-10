@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { PayloadTooLargeError, BadRequestError, textResponse } from "../shared/http";
 import type { Env } from "./env";
-import { createSessionResponse, registerSessionRoutes } from "./routes/sessions";
+import { createSessionResponse, registerSessionRoutes, scriptKindForHeaders } from "./routes/sessions";
 
 export const app = new Hono<{ Bindings: Env }>();
 
@@ -24,8 +24,7 @@ app.use("*", async (c, next) => {
   });
 });
 
-app.get("/", (c) => createSessionResponse(c, "shell"));
-app.get("/a.ps1", (c) => createSessionResponse(c, "powershell"));
+app.get("/", (c) => createSessionResponse(c, scriptKindForHeaders(c.req.raw.headers)));
 
 registerSessionRoutes(app);
 

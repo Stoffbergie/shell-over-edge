@@ -156,7 +156,7 @@ test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell a
   let agent: ReturnType<typeof spawn> | undefined;
   let output = () => "";
   try {
-    const session = await createSession(server.baseUrl, "/a.ps1");
+    const session = await createSession(server.baseUrl, "PowerShell/7.5.0");
     const scriptPath = join(dir, "agent.ps1");
     await writeFile(scriptPath, session.script);
     await mkdir(join(dir, "work"));
@@ -190,7 +190,7 @@ test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell a
   let agent: ReturnType<typeof spawn> | undefined;
   let output = () => "";
   try {
-    const session = await createSession(server.baseUrl, "/a.ps1");
+    const session = await createSession(server.baseUrl, "PowerShell/7.5.0");
     const scriptPath = join(dir, "agent.ps1");
     await writeFile(scriptPath, session.script);
     await mkdir(join(dir, "work"));
@@ -224,8 +224,8 @@ test.skipIf(process.platform !== "win32" || !powerShell)("generated PowerShell a
   }
 });
 
-async function createSession(baseUrl: string, path = "/"): Promise<{ id: string; script: string }> {
-  const response = await fetch(`${baseUrl}${path}`);
+async function createSession(baseUrl: string, userAgent?: string): Promise<{ id: string; script: string }> {
+  const response = await fetch(baseUrl, userAgent ? { headers: { "User-Agent": userAgent } } : undefined);
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
   assert.match(id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
@@ -239,7 +239,7 @@ async function fetchText(url: string): Promise<string> {
 }
 
 async function sendCommand(baseUrl: string, id: string, body: string, details = () => "", timeout = 10): Promise<{ status: number; text: string }> {
-  const response = await fetch(`${baseUrl}/api/sessions/${id}/send?timeout=${timeout}`, {
+  const response = await fetch(`${baseUrl}/${id}/send?timeout=${timeout}`, {
     method: "POST",
     body: JSON.stringify({ body })
   });
@@ -249,7 +249,7 @@ async function sendCommand(baseUrl: string, id: string, body: string, details = 
 }
 
 async function endSession(baseUrl: string, id: string): Promise<void> {
-  const response = await fetch(`${baseUrl}/api/sessions/${id}/end`, { method: "POST" });
+  const response = await fetch(`${baseUrl}/${id}/end`, { method: "POST" });
   assert.equal(response.status, 200);
 }
 

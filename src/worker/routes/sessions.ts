@@ -27,11 +27,16 @@ const internalSessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0
 const sessionCodePattern = /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
 
 export function registerSessionRoutes(app: SessionApp): void {
-  app.post("/api/sessions/:id/send", sendCommand);
+  app.post("/:id/send", sendCommand);
+  app.post("/:id/end", endSession);
   app.post("/api/sessions/:id/hello", agentHello);
   app.get("/api/sessions/:id/next", agentNext);
   app.post("/api/sessions/:id/result/:commandId", agentResult);
-  app.post("/api/sessions/:id/end", endSession);
+}
+
+export function scriptKindForHeaders(headers: Headers): ScriptKind {
+  const signal = `${headers.get("accept") || ""} ${headers.get("user-agent") || ""}`;
+  return /\b(?:powershell|pwsh)\b/i.test(signal) ? "powershell" : "shell";
 }
 
 export async function createSessionResponse(c: SessionContext, kind: ScriptKind): Promise<Response> {

@@ -53,14 +53,28 @@ export async function text(response: Response): Promise<string> {
   return response.text();
 }
 
-export async function createSession(app: Hono<{ Bindings: Env }>, fixture: TestFixture, path = "/"): Promise<{
+export async function createSession(app: Hono<{ Bindings: Env }>, fixture: TestFixture, path?: string): Promise<{
+  id: string;
+  code: string;
+  internalId: string;
+  script: string;
+  contentType: string;
+}>;
+export async function createSession(app: Hono<{ Bindings: Env }>, fixture: TestFixture, path: string, init: RequestInit): Promise<{
+  id: string;
+  code: string;
+  internalId: string;
+  script: string;
+  contentType: string;
+}>;
+export async function createSession(app: Hono<{ Bindings: Env }>, fixture: TestFixture, path = "/", init: RequestInit = {}): Promise<{
   id: string;
   code: string;
   internalId: string;
   script: string;
   contentType: string;
 }> {
-  const response = await app.request(path, {}, fixture.env, fixture.ctx);
+  const response = await app.request(path, init, fixture.env, fixture.ctx);
   assert.equal(response.status, 200);
   const id = response.headers.get("X-Session-Id") || "";
   assert.equal(response.headers.get("X-Session-Internal-Id"), null);

@@ -41,7 +41,7 @@ post_bye() {
   if [ "\${SOE_NO_END_ON_EXIT:-}" = "1" ]; then
     return 0
   fi
-  curl -fsS --connect-timeout 5 --max-time 10 -X POST "$BASE_URL/api/sessions/$SESSION_ID/end" >/dev/null 2>&1 || true
+  curl -fsS --connect-timeout 5 --max-time 10 -X POST "$BASE_URL/$SESSION_ID/end" >/dev/null 2>&1 || true
 }
 
 run_shell() {

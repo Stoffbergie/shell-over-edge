@@ -95,7 +95,7 @@ function Invoke-AgentRequest {
 
 function Send-Bye {
   if ($env:SOE_NO_END_ON_EXIT -eq "1") { return }
-  try { Invoke-AgentRequest -Method Post -Path "/api/sessions/$SessionId/end" | Out-Null } catch {}
+  try { Invoke-AgentRequest -Method Post -Path "/$SessionId/end" | Out-Null } catch {}
 }
 
 function Start-CommandJob([string]$CommandBody, [string]$Cwd) {

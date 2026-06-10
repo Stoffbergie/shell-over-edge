@@ -31,7 +31,11 @@ test("session creation returns relay-only scripts keyed by a short code capabili
   assert.ok(!shell.script.includes("?token" + "="));
   assert.ok(!shell.script.includes("sh \"$AGENT_FILE\""));
 
-  const powerShell = await createSession(app, fixture, "/a.ps1");
+  const powerShell = await createSession(app, fixture, "/", {
+    headers: {
+      "User-Agent": "PowerShell/7.5.0"
+    }
+  });
   assert.equal(powerShell.contentType, "text/plain; charset=utf-8");
   assert.match(powerShell.id, /^[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
   assert.ok(powerShell.script.includes(`$SessionId = "${powerShell.id}"`));
@@ -69,13 +73,13 @@ test("send waits for the agent result and returns plain command output", async (
   assert.equal(hello.status, 200);
   assert.equal(await text(hello), "connected\n");
 
-  const sendJson = app.request(`/api/sessions/${session.id}/send?timeout=12`, {
+  const sendJson = app.request(`/${session.id}/send`, {
     method: "POST",
     body: '{"body":"pwd","cwd":"/tmp"}'
   }, fixture.env, fixture.ctx);
 
   const nextJson = await waitForNext(session.id, fixture);
-  assert.equal(nextJson.headers.get("X-Command-Timeout"), "12");
+  assert.equal(nextJson.headers.get("X-Command-Timeout"), "30");
   assert.equal(Buffer.from(nextJson.headers.get("X-Command-Cwd-Base64") || "", "base64").toString("utf8"), "/tmp");
   assert.equal(await text(nextJson), "pwd");
 
@@ -90,7 +94,7 @@ test("send waits for the agent result and returns plain command output", async (
   assert.equal(sentJson.headers.get("X-Exit-Code"), "0");
   assert.equal(await text(sentJson), "ok\n");
 
-  const sendRaw = app.request(`/api/sessions/${session.id}/send?timeout=3`, {
+  const sendRaw = app.request(`/${session.id}/send?timeout=3`, {
     method: "POST",
     body: "whoami"
   }, fixture.env, fixture.ctx);
@@ -118,7 +122,7 @@ test("parallel sends keep command results matched under burst load", async () =>
     const body = `printf item-${index}`;
     return {
       body,
-      response: app.request(`/api/sessions/${session.id}/send?timeout=20`, {
+      response: app.request(`/${session.id}/send?timeout=20`, {
         method: "POST",
         body: JSON.stringify({ body })
       }, fixture.env, fixture.ctx)
@@ -158,7 +162,7 @@ test("parallel sends keep command results matched under burst load", async () =>
 test("late known command results are acknowledged after helper timeout", async () => {
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);
-  const send = app.request(`/api/sessions/${session.id}/send?timeout=1`, {
+  const send = app.request(`/${session.id}/send?timeout=1`, {
     method: "POST",
     body: '{"body":"slow"}'
   }, fixture.env, fixture.ctx);
@@ -192,21 +196,21 @@ test("invalid sessions, bad send payloads, and removed routes return text errors
   const fixture = createTestEnv();
   const session = await createSession(app, fixture);
 
-  const internalIdSend = await app.request(`/api/sessions/${session.internalId}/send`, {
+  const internalIdSend = await app.request(`/${session.internalId}/send`, {
     method: "POST",
     body: "pwd"
   }, fixture.env, fixture.ctx);
   assert.equal(internalIdSend.status, 404);
   assert.equal(await text(internalIdSend), "Session not found\n");
 
-  const invalidPayload = await app.request(`/api/sessions/${session.id}/send`, {
+  const invalidPayload = await app.request(`/${session.id}/send`, {
     method: "POST",
     body: "{"
   }, fixture.env, fixture.ctx);
   assert.equal(invalidPayload.status, 400);
   assert.equal(await text(invalidPayload), "Invalid JSON command payload\n");
 
-  const bodyTimeout = await app.request(`/api/sessions/${session.id}/send`, {
+  const bodyTimeout = await app.request(`/${session.id}/send`, {
     method: "POST",
     body: '{"body":"pwd","timeoutSeconds":12}'
   }, fixture.env, fixture.ctx);
@@ -225,14 +229,17 @@ test("invalid sessions, bad send payloads, and removed routes return text errors
   assert.equal((await app.request(`/api/sessions/${session.id}/direct-attempts`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request("/connect.sh", {}, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request("/a", {}, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request("/a.ps1", {}, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/api/sessions/${session.id}/send`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
+  assert.equal((await app.request(`/api/sessions/${session.id}/end`, { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request("/api/sessions", { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
   assert.equal((await app.request("/api/sessions.ps1", { method: "POST" }, fixture.env, fixture.ctx)).status, 404);
 
-  const end = await app.request(`/api/sessions/${session.id}/end`, { method: "POST" }, fixture.env, fixture.ctx);
+  const end = await app.request(`/${session.id}/end`, { method: "POST" }, fixture.env, fixture.ctx);
   assert.equal(end.status, 200);
   assert.equal(await text(end), "ended\n");
 
-  const blocked = await app.request(`/api/sessions/${session.id}/send`, {
+  const blocked = await app.request(`/${session.id}/send`, {
     method: "POST",
     body: "pwd"
   }, fixture.env, fixture.ctx);

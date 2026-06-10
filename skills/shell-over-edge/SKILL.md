@@ -10,25 +10,26 @@ Use when SSH, VPN, or inbound ports are blocked and the user can run an agent on
 ## Flow
 
 - Start POSIX: `curl -sS https://soe.stoff.dev | sh`
-- Start PowerShell: `irm https://soe.stoff.dev/a.ps1 | iex`
+- Start PowerShell: `irm https://soe.stoff.dev | iex`
 - Use the printed 8-character code, or read `X-Session-Id`.
-- Send raw: `curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/send --data 'pwd'`
-- Send with cwd/timeout: `curl -sS -X POST 'https://soe.stoff.dev/api/sessions/<code>/send?timeout=30' --data '{"body":"pwd","cwd":"/tmp"}'`
+- Send raw: `curl -sS -X POST https://soe.stoff.dev/<code>/send --data 'pwd'`
+- Send with cwd: `curl -sS -X POST https://soe.stoff.dev/<code>/send --data '{"body":"pwd","cwd":"/tmp"}'`
+- Add `?timeout=10` only for a custom timeout.
 - Read successful `/send` responses as plain text.
-- Close: `curl -sS -X POST https://soe.stoff.dev/api/sessions/<code>/end`
+- Close: `curl -sS -X POST https://soe.stoff.dev/<code>/end`
 
 ## API
 
-- `GET https://soe.stoff.dev` returns a POSIX agent script.
-- `GET https://soe.stoff.dev/a.ps1` returns a PowerShell agent script.
-- `POST https://soe.stoff.dev/api/sessions/<code>/send?timeout=30` sends one command.
-- `POST https://soe.stoff.dev/api/sessions/<code>/end` ends the session.
+- `GET https://soe.stoff.dev` returns POSIX by default, PowerShell when `User-Agent` or `Accept` contains `PowerShell` or `pwsh`.
+- `POST https://soe.stoff.dev/<code>/send` sends one command.
+- `POST https://soe.stoff.dev/<code>/send?timeout=10` sends one command with a custom timeout.
+- `POST https://soe.stoff.dev/<code>/end` ends the session.
 
 ## Rules
 
 - The code is the capability. Do not invent codes or add bearer/URL tokens.
 - Prefer raw command bodies. Use JSON only for `body` and `cwd`.
-- Put command timeout in the URL as `?timeout=30`, not in the JSON body.
+- Default timeout is 30 seconds. Put custom timeout in the URL as `?timeout=10`, not in the JSON body.
 - Do not call retired endpoints: `/commands`, `/events`, `/upload`, `/download`, `/api/agent/*`, `/start/*`, `/connect.sh`.
 - Keep commands explicit and reversible. Close sessions with `/end`.
 

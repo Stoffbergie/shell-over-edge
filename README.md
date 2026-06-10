@@ -18,7 +18,7 @@ curl -sS https://soe.stoff.dev | sh
 Windows PowerShell:
 
 ```powershell
-irm https://soe.stoff.dev/a.ps1 | iex
+irm https://soe.stoff.dev | iex
 ```
 
 The target prints:
@@ -33,32 +33,38 @@ Stop anytime: Ctrl+C
 Raw command:
 
 ```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/1234abcd/send --data 'pwd'
+curl -sS -X POST https://soe.stoff.dev/1234abcd/send --data 'pwd'
 ```
 
-Command with working directory and timeout:
+Command with working directory:
 
 ```sh
-curl -sS -X POST 'https://soe.stoff.dev/api/sessions/1234abcd/send?timeout=30' \
+curl -sS -X POST https://soe.stoff.dev/1234abcd/send \
   --data '{"body":"pwd","cwd":"/tmp"}'
+```
+
+Custom timeout:
+
+```sh
+curl -sS -X POST 'https://soe.stoff.dev/1234abcd/send?timeout=10' --data 'sleep 5'
 ```
 
 Close the session:
 
 ```sh
-curl -sS -X POST https://soe.stoff.dev/api/sessions/1234abcd/end
+curl -sS -X POST https://soe.stoff.dev/1234abcd/end
 ```
 
-`timeout` is URL-only. JSON command bodies support `body` and `cwd`.
+Default timeout is 30 seconds. `timeout` is URL-only. JSON command bodies support `body` and `cwd`.
 
 ## API
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| `GET` | `/` | empty | POSIX agent |
-| `GET` | `/a.ps1` | empty | PowerShell agent |
-| `POST` | `/api/sessions/<code>/send?timeout=30` | raw text or `{"body":"pwd","cwd":"/tmp"}` | command output |
-| `POST` | `/api/sessions/<code>/end` | empty | `ended` |
+| `GET` | `/` | empty | POSIX agent by default, PowerShell for PowerShell clients |
+| `POST` | `/<code>/send` | raw text or `{"body":"pwd","cwd":"/tmp"}` | command output |
+| `POST` | `/<code>/send?timeout=10` | raw text or `{"body":"pwd","cwd":"/tmp"}` | command output |
+| `POST` | `/<code>/end` | empty | `ended` |
 
 ## Architecture
 
@@ -72,7 +78,7 @@ sequenceDiagram
     Target->>Worker: "GET / | sh"
     Worker-->>Target: "agent + code"
     Target->>Bridge: "GET /next"
-    Sender->>Bridge: "POST /send?timeout=30"
+    Sender->>Bridge: "POST /1234abcd/send"
     Bridge-->>Target: "command"
     Target->>Target: "run command"
     Target->>Bridge: "POST /result/:id"

@@ -120,8 +120,12 @@ const powerShellSession = await request("/api/sessions.ps1", {
 });
 assert(powerShellSession.response.status === 404, `retired POST /api/sessions.ps1 should be disabled, got ${powerShellSession.response.status}`);
 
-const powerShell = await request("/a.ps1");
-assert(powerShell.response.ok, `GET /a.ps1 returned ${powerShell.response.status}: ${powerShell.text}`);
+const powerShell = await request("/", {
+  headers: {
+    "User-Agent": "PowerShell/7.5.0"
+  }
+});
+assert(powerShell.response.ok, `PowerShell GET / returned ${powerShell.response.status}: ${powerShell.text}`);
 const powerShellId = powerShell.response.headers["x-session-id"];
 assert(isSessionCode(powerShellId), "PowerShell session code header missing");
 assert(!powerShell.response.headers["x-session-internal-id"], "PowerShell session response leaked internal id");
@@ -136,10 +140,13 @@ assert(!powerShell.text.includes("X-Agent-User"), "PowerShell script should not 
 assert(!powerShell.text.includes("[Environment]::UserName"), "PowerShell script should not read target user");
 assert(!powerShell.text.includes("(Get-Location).Path"), "PowerShell script should not send target cwd telemetry");
 
-const powerShellEnd = await request(`/api/sessions/${powerShellId}/end`, {
+const powerShellEnd = await request(`/${powerShellId}/end`, {
   method: "POST"
 });
 assert(powerShellEnd.response.ok, `PowerShell session end returned ${powerShellEnd.response.status}: ${powerShellEnd.text}`);
+
+const powerShellAlias = await request("/a.ps1");
+assert(powerShellAlias.response.status === 404, `retired /a.ps1 should be disabled, got ${powerShellAlias.response.status}`);
 
 const hello = await request(`/api/sessions/${id}/hello`, {
   method: "POST",
@@ -156,14 +163,14 @@ for (const removed of ["/probe", "/config", "/ice", "/signals"]) {
   assert(removedRoute.response.status === 404, `${removed} should be removed, got ${removedRoute.response.status}`);
 }
 
-const bodyTimeout = await request(`/api/sessions/${id}/send`, {
+const bodyTimeout = await request(`/${id}/send`, {
   method: "POST",
   body: '{"body":"printf smoke-prod","timeoutSeconds":10}'
 });
 assert(bodyTimeout.response.status === 400, `body timeout should be rejected, got ${bodyTimeout.response.status}`);
 assert(bodyTimeout.text === "Use ?timeout= for command timeout\n", "body timeout error payload is wrong");
 
-const send = request(`/api/sessions/${id}/send?timeout=10`, {
+const send = request(`/${id}/send`, {
   method: "POST",
   body: '{"body":"printf smoke-prod"}'
 });
@@ -184,13 +191,24 @@ const sendResult = await send;
 assert(sendResult.response.ok, `send returned ${sendResult.response.status}: ${sendResult.text}`);
 assert(sendResult.text === "smoke-prod", "send returned the wrong command output");
 
-const ended = await request(`/api/sessions/${id}/end`, {
+const oldSend = await request(`/api/sessions/${id}/send`, {
+  method: "POST",
+  body: "pwd"
+});
+assert(oldSend.response.status === 404, `old send route should be disabled, got ${oldSend.response.status}`);
+
+const oldEnd = await request(`/api/sessions/${id}/end`, {
+  method: "POST"
+});
+assert(oldEnd.response.status === 404, `old end route should be disabled, got ${oldEnd.response.status}`);
+
+const ended = await request(`/${id}/end`, {
   method: "POST"
 });
 assert(ended.response.ok, `session end returned ${ended.response.status}: ${ended.text}`);
 assert(ended.text === "ended\n", "session end payload is wrong");
 
-const blocked = await request(`/api/sessions/${id}/send`, {
+const blocked = await request(`/${id}/send`, {
   method: "POST",
   body: "pwd"
 });
