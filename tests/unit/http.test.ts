@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import { strict as assert } from "node:assert";
-import { cleanString, jsonResponse, normalizeTimeout, readLimitedText, textResponse } from "../../src/shared/http";
+import { cleanString, normalizeTimeout, readLimitedText, textResponse } from "../../src/shared/http";
 import { PayloadTooLargeError } from "../../src/shared/http";
 
 test("normalizes and bounds command timeouts", () => {
@@ -23,12 +23,7 @@ test("reads limited text and rejects oversized bodies", async () => {
   );
 });
 
-test("response helpers always set no-store and content type", () => {
-  const json = jsonResponse({ ok: true }, 201);
-  assert.equal(json.status, 201);
-  assert.equal(json.headers.get("Cache-Control"), "no-store");
-  assert.match(json.headers.get("Content-Type") || "", /^application\/json/);
-
+test("text responses always set no-store and content type", () => {
   const text = textResponse("ok", 202, "text/x-test");
   assert.equal(text.status, 202);
   assert.equal(text.headers.get("Cache-Control"), "no-store");

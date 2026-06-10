@@ -17,16 +17,6 @@ export async function readLimitedText(request: Request, maxBytes: number): Promi
   return textDecoder.decode(bytes);
 }
 
-export function jsonResponse(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-      "Content-Type": "application/json; charset=utf-8"
-    }
-  });
-}
-
 export function textResponse(value: string, status = 200, contentType = "text/plain; charset=utf-8"): Response {
   return new Response(value, {
     status,
