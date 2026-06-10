@@ -8,7 +8,10 @@ $BaseUrl = ${quotePowerShell(baseUrl)}
 $SessionId = ${quotePowerShell(meta.code)}
 $AgentVersion = ${quotePowerShell(agentProtocolVersion)}
 $NativeBaseUrl = if ($env:SOE_NATIVE_BASE_URL) { $env:SOE_NATIVE_BASE_URL } else { ${quotePowerShell(nativeReleaseBaseUrl)} }
+$WebRtcBaseUrl = if ($env:SOE_WEBRTC_BASE_URL) { $env:SOE_WEBRTC_BASE_URL } else { $NativeBaseUrl }
 $NativePath = Join-Path ([IO.Path]::GetTempPath()) "soe-agent-$SessionId"
+$WebRtcPath = Join-Path ([IO.Path]::GetTempPath()) "soe-webrtc-$SessionId.exe"
+$WebRtcActivePath = Join-Path ([IO.Path]::GetTempPath()) "soe-webrtc-active-$SessionId"
 $UpgradeToNative = $false
 $PlatformName = if ($PSVersionTable.Platform) { [string]$PSVersionTable.Platform } else { [string][Environment]::OSVersion.Platform }
 $Headers = @{
@@ -174,6 +177,23 @@ function Get-NativeName {
   return ""
 }
 
+function Get-WebRtcName {
+  $Architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+  if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)) {
+    if ($Architecture -eq "arm64") { return "soe-webrtc-aarch64-windows.exe" }
+    if ($Architecture -eq "x64") { return "soe-webrtc-x86_64-windows.exe" }
+  }
+  if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::OSX)) {
+    if ($Architecture -eq "arm64") { return "soe-webrtc-aarch64-macos" }
+    if ($Architecture -eq "x64") { return "soe-webrtc-x86_64-macos" }
+  }
+  if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Linux)) {
+    if ($Architecture -eq "arm64") { return "soe-webrtc-aarch64-linux" }
+    if ($Architecture -eq "x64") { return "soe-webrtc-x86_64-linux" }
+  }
+  return ""
+}
+
 function Start-NativeDownload {
   $Name = Get-NativeName
   if (!$Name -and !$env:SOE_NATIVE_URL) { return $false }
@@ -185,6 +205,26 @@ function Start-NativeDownload {
       & chmod +x $NativePath 2>$null
     }
     return Test-Path -LiteralPath $NativePath -PathType Leaf
+  } catch {
+    return $false
+  }
+}
+
+function Start-WebRtcDriver {
+  $Name = Get-WebRtcName
+  if (!$Name -and !$env:SOE_WEBRTC_URL) { return $false }
+  $Url = if ($env:SOE_WEBRTC_URL) { $env:SOE_WEBRTC_URL } else { "$WebRtcBaseUrl/$Name" }
+  try {
+    if (!(Test-Path -LiteralPath $WebRtcPath -PathType Leaf)) {
+      Invoke-WebRequest -Uri $Url -OutFile "$WebRtcPath.tmp" -UseBasicParsing -TimeoutSec 40
+      Move-Item "$WebRtcPath.tmp" $WebRtcPath -Force
+      if (![Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)) {
+        & chmod +x $WebRtcPath 2>$null
+      }
+    }
+    Start-Process -FilePath $WebRtcPath -ArgumentList @("agent", "--base-url", $BaseUrl, "--session", $SessionId) | Out-Null
+    Set-Content -LiteralPath $WebRtcActivePath -Value "1"
+    return $true
   } catch {
     return $false
   }
@@ -215,6 +255,8 @@ function Get-PrivateIps {
 
 function Get-ProbeJson {
   $NativeSupported = ![string]::IsNullOrWhiteSpace((Get-NativeName))
+  $WebRtcSupported = ![string]::IsNullOrWhiteSpace((Get-WebRtcName))
+  $ActiveTransport = if (Test-Path -LiteralPath $WebRtcActivePath -PathType Leaf) { "webrtc" } else { "relay" }
   $CpuName = ""
   $MemoryBytes = $null
   try { $CpuName = (Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Name) } catch {}
@@ -255,10 +297,10 @@ function Get-ProbeJson {
       relay = $true
       native = $NativeSupported
       directHttp = $false
-      webrtc = $false
+      webrtc = $WebRtcSupported
       webrtcSignaling = $true
     }
-    activeTransport = "relay"
+    activeTransport = $ActiveTransport
   }
   return ($Payload | ConvertTo-Json -Depth 8 -Compress)
 }
@@ -283,11 +325,10 @@ function Get-ConfigJson([string]$Requested) {
     return (@{ ok = $true; requested = "direct"; active = "relay"; upgraded = $false; fallback = $true; reason = "this PowerShell agent does not run a direct HTTP listener yet" } | ConvertTo-Json -Compress)
   }
   if ($Mode -eq "webrtc") {
-    if (Start-NativeDownload) {
-      $script:UpgradeToNative = $true
-      return (@{ ok = $true; requested = "webrtc"; active = "native"; upgraded = $true; fallback = $true; reason = "native driver downloaded; WebRTC is not enabled in this driver yet" } | ConvertTo-Json -Compress)
+    if (Start-WebRtcDriver) {
+      return (@{ ok = $true; requested = "webrtc"; active = "webrtc"; upgraded = $true; fallback = $false; reason = "WebRTC sidecar started; relay remains available as fallback" } | ConvertTo-Json -Compress)
     }
-    return (@{ ok = $true; requested = "webrtc"; active = "relay"; upgraded = $false; fallback = $true; reason = "WebRTC needs a sender-side driver and an agent runtime with WebRTC support; this PowerShell agent only has signaling support" } | ConvertTo-Json -Compress)
+    return (@{ ok = $true; requested = "webrtc"; active = "relay"; upgraded = $false; fallback = $true; reason = "WebRTC sidecar is not available on this machine" } | ConvertTo-Json -Compress)
   }
   return (@{ ok = $false; requested = $Mode; active = "relay"; upgraded = $false; fallback = $true; reason = "unsupported transport" } | ConvertTo-Json -Compress)
 }

@@ -42,6 +42,11 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.match(script, /probe_json\(\)/);
   assert.match(script, /config_json\(\)/);
   assert.match(script, /download_native\(\)/);
+  assert.match(script, /download_webrtc\(\)/);
+  assert.match(script, /start_webrtc\(\)/);
+  assert.match(script, /soe-webrtc-aarch64-macos/);
+  assert.match(script, /soe-webrtc-x86_64-linux/);
+  assert.match(script, /"active":"webrtc"/);
   assert.match(script, /X-Command-Type/);
   assert.ok(!script.includes("paste -sd"));
   assert.match(script, /exec "\$NATIVE_FILE" --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
@@ -56,8 +61,7 @@ test("generated shell agent is portable across common Unix environments", () => 
   assert.ok(!script.includes("/api/agent/"));
   assert.ok(!script.includes("/start/"));
   assert.ok(!script.includes("?token" + "="));
-  assert.ok(!script.includes("/signals"));
-  assert.ok(!script.includes("/ice"));
+  assert.match(script, /agent --base-url "\$BASE_URL" --session "\$SESSION_ID"/);
   assert.ok(!script.includes("stun.cloudflare.com"));
   assert.ok(!script.includes("turn.cloudflare.com"));
   assert.ok(!script.includes("RTCPeerConnection"));
@@ -93,6 +97,10 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   assert.match(script, /Get-ProbeJson/);
   assert.match(script, /Get-ConfigJson/);
   assert.match(script, /Start-NativeDownload/);
+  assert.match(script, /Start-WebRtcDriver/);
+  assert.match(script, /soe-webrtc-aarch64-windows\.exe/);
+  assert.match(script, /soe-webrtc-x86_64-linux/);
+  assert.match(script, /active = "webrtc"/);
   assert.match(script, /Command timed out after \$TimeoutSeconds seconds/);
   assert.match(script, /\$StatusCode -eq 204/);
   assert.ok(!script.includes("Start-Sleep -Seconds 2"));
@@ -104,8 +112,7 @@ test("generated PowerShell agent keeps Windows request fallbacks", () => {
   assert.ok(!script.includes("/api/agent/"));
   assert.ok(!script.includes("/start/"));
   assert.ok(!script.includes("?token" + "="));
-  assert.ok(!script.includes("/signals"));
-  assert.ok(!script.includes("/ice"));
+  assert.match(script, /"agent", "--base-url", \$BaseUrl, "--session", \$SessionId/);
   assert.ok(!script.includes("stun.cloudflare.com"));
   assert.ok(!script.includes("turn.cloudflare.com"));
   assert.ok(!script.includes("RTCPeerConnection"));

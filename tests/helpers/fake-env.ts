@@ -3,6 +3,7 @@ import type { Hono } from "hono";
 import type { DirectRole, DirectSignal, DirectSignalPayload } from "../../src/domain/direct";
 import { directSignalKey, normalizeDirectRole, normalizeDirectSignal, sortDirectSignals } from "../../src/domain/direct";
 import type { SessionMeta } from "../../src/domain/session";
+import { maxDirectSignalsPerRole } from "../../src/shared/config";
 import type { Env } from "../../src/worker/env";
 
 type BridgeFetch = (id: string, request: RequestInfo | URL, init?: RequestInit) => Response | Promise<Response>;
@@ -346,7 +347,9 @@ class FakeSessionBridge {
   }
 
   private trimSignals(role: DirectRole): void {
-    const keep = sortDirectSignals(this.signals.filter((signal) => signal.role === role)).slice(0, 8);
+    const keep = [...this.signals.filter((signal) => signal.role === role)]
+      .sort((a, b) => a.priority - b.priority || b.createdAt - a.createdAt)
+      .slice(0, maxDirectSignalsPerRole);
     const keepIds = new Set(keep.map((signal) => signal.id));
     this.signals = this.signals.filter((signal) => signal.role !== role || keepIds.has(signal.id));
   }

@@ -197,6 +197,57 @@ test.skipIf(process.platform === "win32" || !sh || !curl)("generated POSIX agent
   }
 });
 
+test.skipIf(process.platform === "win32" || !sh || !curl)("generated POSIX agent starts WebRTC sidecar on config request", async () => {
+  const fixture = createTestEnv();
+  const server = await startAppServer(app, fixture);
+  const sidecar = await startWebRtcAssetServer();
+  const dir = await mkdtemp(join(tmpdir(), "soe-posix-config-webrtc-"));
+  let agent: ReturnType<typeof spawn> | undefined;
+  let output = () => "";
+  try {
+    const session = await createSession(server.baseUrl);
+    const scriptPath = join(dir, "agent.sh");
+    await writeFile(scriptPath, session.script, { mode: 0o700 });
+    agent = spawn(sh, [scriptPath], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        SOE_WEBRTC_URL: sidecar.url,
+        NO_PROXY: "127.0.0.1,localhost",
+        no_proxy: "127.0.0.1,localhost"
+      }
+    });
+    output = captureOutput(agent);
+
+    const config = await controlRequest(server.baseUrl, session.id, "config", "webrtc", diagnostics(output, server));
+    assert.equal(config.status, 200);
+    const payload = JSON.parse(config.text) as { requested: string; active: string; upgraded: boolean; fallback: boolean };
+    assert.equal(payload.requested, "webrtc");
+    assert.equal(payload.active, "webrtc");
+    assert.equal(payload.upgraded, true);
+    assert.equal(payload.fallback, false);
+    assert.ok(sidecar.requests.length > 0);
+
+    const probe = await controlRequest(server.baseUrl, session.id, "probe", "", diagnostics(output, server));
+    assert.equal(probe.status, 200);
+    const probePayload = JSON.parse(probe.text) as { activeTransport: string; supports: { webrtc: boolean } };
+    assert.equal(probePayload.activeTransport, "webrtc");
+    assert.equal(probePayload.supports.webrtc, true);
+
+    const result = await sendCommand(server.baseUrl, session.id, "printf relay-still-works", diagnostics(output, server));
+    assert.equal(result.status, 200);
+    assert.equal(result.text, "relay-still-works");
+
+    await endSession(server.baseUrl, session.id);
+    await waitForExit(agent, 10_000, output);
+  } finally {
+    if (agent && agent.exitCode === null) agent.kill();
+    await sidecar.close();
+    await removeDir(dir);
+    await server.close();
+  }
+});
+
 test.skipIf(!sh || !curl)("generated POSIX agent script drains parallel relay sends without result mixups", async () => {
   const fixture = createTestEnv();
   const server = await startAppServer(app, fixture);
@@ -417,6 +468,8 @@ type NativeAssetServer = {
   url: string;
 };
 
+type WebRtcAssetServer = NativeAssetServer;
+
 async function startNativeAssetServer(): Promise<NativeAssetServer> {
   const requests: string[] = [];
   const body = "#!/bin/sh\nprintf 'fake-native %s\\n' \"$*\"\n";
@@ -437,6 +490,29 @@ async function startNativeAssetServer(): Promise<NativeAssetServer> {
     },
     requests,
     url: `http://127.0.0.1:${address.port}/soe-agent`
+  };
+}
+
+async function startWebRtcAssetServer(): Promise<WebRtcAssetServer> {
+  const requests: string[] = [];
+  const body = "#!/bin/sh\nexit 0\n";
+  const server = createServer((request, response) => {
+    requests.push(request.url || "/");
+    response.writeHead(200, {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": Buffer.byteLength(body)
+    });
+    response.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Could not start WebRTC asset server");
+  return {
+    close: async () => {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    },
+    requests,
+    url: `http://127.0.0.1:${address.port}/soe-webrtc`
   };
 }
 

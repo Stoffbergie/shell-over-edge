@@ -20,12 +20,13 @@ test("normalizes HTTP direct signals", () => {
 });
 
 test("normalizes WebRTC offer and candidate signal data", () => {
-  const offer = normalizeWebRtcSignalData({ type: "offer", sdp: "v=0\r\n" });
-  assert.deepEqual(offer, { kind: "offer", sdp: "v=0\r\n" });
+  const offer = normalizeWebRtcSignalData({ type: "offer", sdp: "v=0\r\n", connectionId: "conn-1" });
+  assert.deepEqual(offer, { kind: "offer", connectionId: "conn-1", sdp: "v=0\r\n" });
 
-  const candidate = normalizeWebRtcSignalData({ candidate: "candidate:1 udp 1 127.0.0.1 5000 typ host", sdpMid: "0", sdpMLineIndex: 0 });
+  const candidate = normalizeWebRtcSignalData({ candidate: "candidate:1 udp 1 127.0.0.1 5000 typ host", connectionId: "conn-1", sdpMid: "0", sdpMLineIndex: 0 });
   assert.deepEqual(candidate, {
     kind: "candidate",
+    connectionId: "conn-1",
     candidate: "candidate:1 udp 1 127.0.0.1 5000 typ host",
     sdpMid: "0",
     sdpMLineIndex: 0

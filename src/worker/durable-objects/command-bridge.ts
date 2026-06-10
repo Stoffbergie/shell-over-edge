@@ -218,7 +218,9 @@ export class CommandBridge extends DurableObject<Env> {
   }
 
   private trimSignals(role: DirectRole): void {
-    const keep = sortDirectSignals(this.signals.filter((signal) => signal.role === role)).slice(0, maxDirectSignalsPerRole);
+    const keep = [...this.signals.filter((signal) => signal.role === role)]
+      .sort((a, b) => a.priority - b.priority || b.createdAt - a.createdAt)
+      .slice(0, maxDirectSignalsPerRole);
     const keepIds = new Set(keep.map((signal) => signal.id));
     this.signals = this.signals.filter((signal) => signal.role !== role || keepIds.has(signal.id));
   }

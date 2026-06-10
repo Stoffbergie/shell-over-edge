@@ -10,6 +10,9 @@ SESSION_ID=${quoteShell(meta.code)}
 AGENT_VERSION=${quoteShell(agentProtocolVersion)}
 NATIVE_BASE_URL=\${SOE_NATIVE_BASE_URL:-${quoteShell(nativeReleaseBaseUrl)}}
 NATIVE_FILE="\${TMPDIR:-/tmp}/soe-agent-$SESSION_ID"
+WEBRTC_BASE_URL=\${SOE_WEBRTC_BASE_URL:-$NATIVE_BASE_URL}
+WEBRTC_FILE="\${TMPDIR:-/tmp}/soe-webrtc-$SESSION_ID"
+WEBRTC_ACTIVE_FILE="\${TMPDIR:-/tmp}/soe-webrtc-active-$SESSION_ID"
 UPGRADE_TO_NATIVE=0
 
 copy_text() {
@@ -72,6 +75,18 @@ native_name() {
   esac
 }
 
+webrtc_name() {
+  os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  arch=$(uname -m 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  case "$os:$arch" in
+    darwin:arm64) printf '%s' soe-webrtc-aarch64-macos ;;
+    darwin:x86_64) printf '%s' soe-webrtc-x86_64-macos ;;
+    linux:aarch64|linux:arm64) printf '%s' soe-webrtc-aarch64-linux ;;
+    linux:x86_64|linux:amd64) printf '%s' soe-webrtc-x86_64-linux ;;
+    *) printf '' ;;
+  esac
+}
+
 download_native() {
   if ! command -v curl >/dev/null 2>&1; then
     return 1
@@ -86,6 +101,30 @@ download_native() {
   curl -fsSL --connect-timeout 5 --max-time 40 -o "$NATIVE_FILE.tmp" "$url" >/dev/null 2>&1 || return 1
   chmod +x "$NATIVE_FILE.tmp" || return 1
   mv "$NATIVE_FILE.tmp" "$NATIVE_FILE"
+}
+
+download_webrtc() {
+  if ! command -v curl >/dev/null 2>&1; then
+    return 1
+  fi
+  if [ -n "\${SOE_WEBRTC_URL:-}" ]; then
+    url="$SOE_WEBRTC_URL"
+  else
+    name=$(webrtc_name)
+    [ -n "$name" ] || return 1
+    url="$WEBRTC_BASE_URL/$name"
+  fi
+  curl -fsSL --connect-timeout 5 --max-time 40 -o "$WEBRTC_FILE.tmp" "$url" >/dev/null 2>&1 || return 1
+  chmod +x "$WEBRTC_FILE.tmp" || return 1
+  mv "$WEBRTC_FILE.tmp" "$WEBRTC_FILE"
+}
+
+start_webrtc() {
+  if [ ! -x "$WEBRTC_FILE" ]; then
+    download_webrtc || return 1
+  fi
+  "$WEBRTC_FILE" agent --base-url "$BASE_URL" --session "$SESSION_ID" >/dev/null 2>&1 &
+  : > "$WEBRTC_ACTIVE_FILE"
 }
 
 private_ips() {
@@ -134,6 +173,10 @@ probe_json() {
   latency=$(latency_ms)
   native_supported=false
   [ -n "$(native_name)" ] && native_supported=true
+  webrtc_supported=false
+  [ -n "$(webrtc_name)" ] && webrtc_supported=true
+  active_transport=relay
+  [ -f "$WEBRTC_ACTIVE_FILE" ] && active_transport=webrtc
   printf '{'
   printf '"session":"%s",' "$(json_value "$SESSION_ID")"
   printf '"agent":{"kind":"posix-shell","version":"%s","pid":%s},' "$(json_value "$AGENT_VERSION")" "$$"
@@ -141,8 +184,8 @@ probe_json() {
   printf '"hardware":{"cpu":"%s","cores":"%s","memoryBytes":"%s"},' "$(json_value "$(first_line "$cpu")")" "$(json_value "$cores")" "$(json_value "$memory")"
   printf '"runtime":{"shell":"%s","cwd":"%s","user":"%s","hostname":"%s","commands":{"curl":%s,"sh":%s,"bash":%s,"zsh":%s,"python3":%s,"node":%s,"bun":%s,"timeout":%s,"base64":%s}},' "$(json_value "$shell_name")" "$(json_value "$cwd")" "$(json_value "$user")" "$(json_value "$host")" "$(has_command curl)" "$(has_command sh)" "$(has_command bash)" "$(has_command zsh)" "$(has_command python3)" "$(has_command node)" "$(has_command bun)" "$(has_command timeout)" "$(has_command base64)"
   printf '"network":{"baseUrl":"%s","baseUrlLatencyMs":"%s","privateIps":"%s"},' "$(json_value "$BASE_URL")" "$(json_value "$latency")" "$(json_value "$ips")"
-  printf '"supports":{"relay":true,"native":%s,"directHttp":false,"webrtc":false,"webrtcSignaling":true},' "$native_supported"
-  printf '"activeTransport":"relay"'
+  printf '"supports":{"relay":true,"native":%s,"directHttp":false,"webrtc":%s,"webrtcSignaling":true},' "$native_supported" "$webrtc_supported"
+  printf '"activeTransport":"%s"' "$active_transport"
   printf '}'
 }
 
@@ -170,11 +213,10 @@ config_json() {
       fi
       ;;
     webrtc)
-      if download_native; then
-        UPGRADE_TO_NATIVE=1
-        printf '{"ok":true,"requested":"webrtc","active":"native","upgraded":true,"fallback":true,"reason":"native driver downloaded; WebRTC is not enabled in this driver yet"}'
+      if start_webrtc; then
+        printf '{"ok":true,"requested":"webrtc","active":"webrtc","upgraded":true,"fallback":false,"reason":"WebRTC sidecar started; relay remains available as fallback"}'
       else
-        printf '{"ok":true,"requested":"webrtc","active":"relay","upgraded":false,"fallback":true,"reason":"WebRTC needs a sender-side driver and an agent runtime with WebRTC support; this POSIX shell agent only has signaling support"}'
+        printf '{"ok":true,"requested":"webrtc","active":"relay","upgraded":false,"fallback":true,"reason":"WebRTC sidecar is not available on this machine"}'
       fi
       ;;
     *)
