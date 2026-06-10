@@ -4,10 +4,6 @@ Ordered by impact on a five-minute senior-engineer review.
 
 ## Open
 
-- [ ] P1: Make the README pass a cold-clone skim.
-  - Problem: README lacks a concrete demo, explicit runtime prerequisites, separated setup/test/dev instructions, and tech-decision rationale. It also labels the skill with an internal tool name.
-  - Proof required: `pnpm run repo:audit`; README commands checked locally.
-
 - [ ] P2: Delete dead support code and template leftovers.
   - Problem: `ENABLE_LEGACY_BRIDGE` and `legacyBridge` are unused, `jsonResponse` only exists for its own unit test, and `pnpm-workspace.yaml` advertises nonexistent workspace package globs.
   - Proof required: `pnpm run validate`.
@@ -29,3 +25,7 @@ Ordered by impact on a five-minute senior-engineer review.
 - [x] P1: Add a real lint target and wire it into the quality gate.
   - Fixed: added Biome linting, included it in `pnpm run check`, removed the unnecessary Durable Object constructor, and made the test server header copy callback explicit.
   - Proof: `pnpm run lint`; `pnpm run validate`; `pnpm run build`.
+
+- [x] P1: Make the README pass a cold-clone skim.
+  - Fixed: added a concrete terminal demo, runtime requirements, fresh-clone setup, separate local-development instructions, tech-decision rationale, and removed the internal tool label. `repo-audit` now guards the required README sections.
+  - Proof: `corepack enable`; `pnpm install --frozen-lockfile`; `pnpm run repo:audit`; `pnpm run validate`; `pnpm run build`; local `pnpm run dev` plus `curl -sS http://127.0.0.1:8787/`.
