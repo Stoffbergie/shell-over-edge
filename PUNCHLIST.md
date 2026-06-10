@@ -4,9 +4,7 @@ Ordered by impact on a five-minute senior-engineer review.
 
 ## Open
 
-- [ ] P3: Make the package scripts read like a production Worker.
-  - Problem: `build` only runs TypeScript, while the real Worker bundle proof is `wrangler deploy --dry-run`. The root terminal usage also omits the close-session command.
-  - Proof required: `pnpm run build`; local `pnpm run dev` root output includes start, send, and end.
+No open items.
 
 ## Done
 
@@ -29,3 +27,7 @@ Ordered by impact on a five-minute senior-engineer review.
 - [x] P2: Test the real Durable Object command bridge directly.
   - Fixed: extracted the production queue/result implementation into `CommandBridgeCore`, kept the Durable Object as a thin adapter, and added direct tests for parallel result matching, `/end` waiter resolution, command timeout, and late-result acknowledgement.
   - Proof: `pnpm exec vitest run tests/unit/command-bridge-core.test.ts`; `pnpm run validate` with 26 passing tests; `pnpm run build`; local `pnpm run dev` plus root curl.
+
+- [x] P3: Make the package scripts read like a production Worker.
+  - Fixed: `pnpm run build` now typechecks and runs the Cloudflare Worker dry-run bundle. Root terminal usage now includes the close-session command.
+  - Proof: `pnpm run validate`; `pnpm run build`; local `pnpm run dev` plus root output grep for bootstrap, send, and end commands.

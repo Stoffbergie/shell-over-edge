@@ -13,5 +13,8 @@ curl -sS -X POST ${baseUrl}/api/sessions/<code>/send --data 'pwd'
 Send a command with options:
 curl -sS -X POST ${baseUrl}/api/sessions/<code>/send \\
   --data '{"body":"pwd"}'
+
+Close the session:
+curl -sS -X POST ${baseUrl}/api/sessions/<code>/end
 `;
 }

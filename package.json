@@ -12,7 +12,7 @@
   "private": false,
   "scripts": {
     "dev": "wrangler dev --ip 0.0.0.0 --port 8787",
-    "build": "pnpm run typecheck",
+    "build": "pnpm run typecheck && pnpm run dry-run",
     "typecheck": "tsc --noEmit",
     "deploy": "pnpm run check && wrangler deploy",
     "check": "pnpm run typecheck && pnpm run typecheck:test && pnpm run lint && pnpm run test && pnpm run repo:audit",
