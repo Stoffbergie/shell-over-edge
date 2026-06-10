@@ -35,9 +35,6 @@ pub fn main(init: std.process.Init) !void {
     var client: std.http.Client = .{ .allocator = allocator, .io = init.io };
     defer client.deinit();
 
-    try printLine(init.io, allocator, "Shell Over Edge native agent");
-    try printLine(init.io, allocator, options.session);
-
     const cwd = try currentDirectory(init.io, allocator);
     defer allocator.free(cwd);
     const hello = try request(allocator, &client, .POST, options.base_url, options.session, "/hello", cwd, &.{});
@@ -53,10 +50,7 @@ pub fn main(init: std.process.Init) !void {
         switch (next.status) {
             .no_content => continue,
             .ok => {},
-            .gone, .not_found, .unauthorized => {
-                if (next.body.len > 0) try printLine(init.io, allocator, next.body);
-                break;
-            },
+            .gone, .not_found, .unauthorized => break,
             else => {
                 try sleepSeconds(init.io, 1);
                 continue;
@@ -293,15 +287,6 @@ fn currentDirectory(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
 fn trimRightSlash(value: []const u8) []const u8 {
     if (value.len > 0 and value[value.len - 1] == '/') return value[0 .. value.len - 1];
     return value;
-}
-
-fn printLine(io: std.Io, allocator: std.mem.Allocator, value: []const u8) !void {
-    const line = try std.fmt.allocPrint(allocator, "{s}\n", .{value});
-    defer allocator.free(line);
-    var buffer: [1024]u8 = undefined;
-    var writer = std.Io.File.stdout().writer(io, &buffer);
-    try writer.interface.writeAll(line);
-    try writer.interface.flush();
 }
 
 fn sleepSeconds(io: std.Io, seconds: i64) !void {
