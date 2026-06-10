@@ -90,9 +90,9 @@ download_native() {
 
 private_ips() {
   if command -v ip >/dev/null 2>&1; then
-    ip -o -4 addr show scope global 2>/dev/null | awk '{ split($4, a, "/"); print a[1] }' | paste -sd,
+    ip -o -4 addr show scope global 2>/dev/null | awk '{ split($4, a, "/"); if (out) out = out "," a[1]; else out = a[1] } END { print out }'
   elif command -v ifconfig >/dev/null 2>&1; then
-    ifconfig 2>/dev/null | awk '/inet / && $2 !~ /^127\\./ { print $2 }' | paste -sd,
+    ifconfig 2>/dev/null | awk '/inet / && $2 !~ /^127\\./ { if (out) out = out "," $2; else out = $2 } END { print out }'
   else
     printf ''
   fi
