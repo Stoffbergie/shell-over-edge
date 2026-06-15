@@ -55,8 +55,9 @@ jobs:
         os:
           - blacksmith-4vcpu-ubuntu-2404
           - blacksmith-4vcpu-ubuntu-2204
-          - blacksmith-6vcpu-macos-latest
-          - blacksmith-4vcpu-windows-2025
+          - macos-latest
+          - windows-latest
+          - windows-2022
     steps:
       - uses: actions/checkout@v6
         with:
