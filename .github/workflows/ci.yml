@@ -22,7 +22,7 @@ concurrency:
 jobs:
   validate:
     name: Validate Worker
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
@@ -53,11 +53,10 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
-          - ubuntu-22.04
-          - macos-latest
-          - windows-latest
-          - windows-2022
+          - blacksmith-4vcpu-ubuntu-2404
+          - blacksmith-4vcpu-ubuntu-2204
+          - blacksmith-6vcpu-macos-latest
+          - blacksmith-4vcpu-windows-2025
     steps:
       - uses: actions/checkout@v6
         with:
@@ -81,7 +80,7 @@ jobs:
 
   linux-containers:
     name: Linux Container Agents
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
